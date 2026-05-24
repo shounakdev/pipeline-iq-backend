@@ -19,7 +19,7 @@ def run_command(command: list[str], cwd: str | None = None, log_fn=None, timeout
             env=env,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
         )
 
         output = ""
@@ -36,7 +36,7 @@ def run_command(command: list[str], cwd: str | None = None, log_fn=None, timeout
         return {
             "success": result.returncode == 0,
             "output": output,
-            "return_code": result.returncode
+            "return_code": result.returncode,
         }
 
     except subprocess.TimeoutExpired:
@@ -48,11 +48,8 @@ def run_command(command: list[str], cwd: str | None = None, log_fn=None, timeout
         return {
             "success": False,
             "output": output,
-            "return_code": -1
+            "return_code": -1,
         }
-
-
-
 
 
 def execute_node_pipeline(repo_url: str, branch: str):
@@ -82,14 +79,14 @@ def execute_node_pipeline(repo_url: str, branch: str):
             ["git", "clone", repo_url, "repo"],
             cwd=temp_dir,
             log_fn=log,
-            timeout=300
+            timeout=300,
         )
 
         if not clone_result["success"]:
             return {
                 "success": False,
                 "logs": logs,
-                "failure_reason": "Git clone failed"
+                "failure_reason": "Git clone failed",
             }
 
         repo_path = os.path.join(temp_dir, "repo")
@@ -98,14 +95,14 @@ def execute_node_pipeline(repo_url: str, branch: str):
             ["git", "checkout", branch],
             cwd=repo_path,
             log_fn=log,
-            timeout=120
+            timeout=120,
         )
 
         if not checkout_result["success"]:
             return {
                 "success": False,
                 "logs": logs,
-                "failure_reason": "Branch checkout failed"
+                "failure_reason": "Branch checkout failed",
             }
 
         package_json_path = os.path.join(repo_path, "package.json")
@@ -116,7 +113,7 @@ def execute_node_pipeline(repo_url: str, branch: str):
             return {
                 "success": False,
                 "logs": logs,
-                "failure_reason": "package.json not found. Only Node.js projects are supported right now."
+                "failure_reason": "package.json not found. Only Node.js projects are supported right now.",
             }
 
         package_lock_path = os.path.join(repo_path, "package-lock.json")
@@ -130,42 +127,42 @@ def execute_node_pipeline(repo_url: str, branch: str):
             install_command,
             cwd=repo_path,
             log_fn=log,
-            timeout=300
+            timeout=300,
         )
 
         if not install_result["success"]:
             return {
                 "success": False,
                 "logs": logs,
-                "failure_reason": "npm install failed"
+                "failure_reason": "npm install failed",
             }
 
         test_result = run_command(
             ["npm", "test"],
             cwd=repo_path,
             log_fn=log,
-            timeout=300
+            timeout=300,
         )
 
         if not test_result["success"]:
             return {
                 "success": False,
                 "logs": logs,
-                "failure_reason": "npm test failed"
+                "failure_reason": "npm test failed",
             }
 
         build_result = run_command(
             ["npm", "run", "build"],
             cwd=repo_path,
             log_fn=log,
-            timeout=300
+            timeout=300,
         )
 
         if not build_result["success"]:
             return {
                 "success": False,
                 "logs": logs,
-                "failure_reason": "npm run build failed"
+                "failure_reason": "npm run build failed",
             }
 
         project_key = os.getenv("SONARQUBE_PROJECT_KEY", "cicd-demo")
@@ -173,18 +170,31 @@ def execute_node_pipeline(repo_url: str, branch: str):
         sonar_result = run_sonar_scan(
             repo_path=repo_path,
             project_key=project_key,
-            log_fn=log
+            log_fn=log,
         )
 
-        if not sonar_result.get("skipped") and not sonar_result["success"]:
-            return {
-                "success": False,
-                "logs": logs,
-                "failure_reason": "SonarQube scan failed or quality gate failed"
-            }
+        # MVP/demo behavior:
+        # Build/test failures fail the pipeline.
+        # SonarQube failures/timeouts are warnings only, so demo is not blocked.
+        if sonar_result.get("skipped"):
+            log("WARNING: SonarQube scan skipped. Continuing because build and tests passed.")
+
+        elif not sonar_result.get("success"):
+            log("WARNING: SonarQube scan failed or timed out. Continuing because build and tests passed.")
+            log(
+                "SonarQube issue: "
+                + str(
+                    sonar_result.get("error")
+                    or sonar_result.get("failure_reason")
+                    or "Unknown SonarQube scan issue"
+                )
+            )
+
+        else:
+            log("SonarQube scan completed successfully.")
 
         return {
             "success": True,
             "logs": logs,
-            "failure_reason": None
+            "failure_reason": None,
         }

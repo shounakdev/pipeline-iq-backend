@@ -1,4 +1,4 @@
-# Environment variables
+# Environment variables / secrets
 .env
 .env.*
 !.env.example
@@ -25,6 +25,7 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
 
 # Logs
@@ -34,17 +35,16 @@ logs/
 # Database/local files
 *.sqlite3
 *.db
+*.sqlite
+instance/
 
-# Docker override files
+# Celery files
+celerybeat-schedule
+celerybeat.pid
+*.pid
+
+# Docker local override files
 docker-compose.override.yml
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE/editor files
-.vscode/
-.idea/
 
 # Sonar/cache/temp
 .scannerwork/
@@ -53,3 +53,12 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE/editor files
+.vscode/
+.idea/

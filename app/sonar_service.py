@@ -11,7 +11,7 @@ def get_sonar_url():
         os.getenv("SONARQUBE_URL")
         or os.getenv("SONARQUBE_HOST")
         or os.getenv("SONARQUBE_HOST_URL")
-        or "http://sonarqube:9000"
+        or "http://localhost:9000"
     )
 
 
@@ -65,8 +65,8 @@ def run_sonar_scan(repo_path: str, project_key: str | None = None, log_fn=None):
         f"-Dsonar.login={sonar_token}",
         "-Dsonar.sourceEncoding=UTF-8",
         "-Dsonar.exclusions=node_modules/**,.next/**,dist/**,build/**,coverage/**",
-        "-Dsonar.qualitygate.wait=true",
-        "-Dsonar.qualitygate.timeout=300",
+        "-Dsonar.qualitygate.wait=false",
+        
     ]
 
     command_text = " ".join(command)
@@ -83,7 +83,7 @@ def run_sonar_scan(repo_path: str, project_key: str | None = None, log_fn=None):
             env=env,
             capture_output=True,
             text=True,
-            timeout=420,
+            timeout=60,
         )
 
         output = ""

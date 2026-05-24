@@ -1,4 +1,5 @@
 import json
+import os
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import uuid4
@@ -20,9 +21,17 @@ app = FastAPI(
     version="1.0.0"
 )
 
+origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    os.getenv("FRONTEND_URL", ""),
+]
+
+origins = [origin for origin in origins if origin]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,7 +70,11 @@ def trigger_pipeline(request: PipelineTriggerRequest, db: Session = Depends(get_
     db.commit()
     db.refresh(pipeline)
 
-    execute_pipeline_task.delay(pipeline_id)
+    execute_pipeline_task.apply_async(
+        args=[pipeline_id],
+        queue="pipeline_queue",
+        ignore_result=True,
+)
 
     return {
         "pipeline_id": pipeline_id,
