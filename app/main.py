@@ -11,12 +11,12 @@ from app.models import Pipeline, PipelineLog, Analysis
 from app.schemas import PipelineTriggerRequest, PipelineResponse
 from app.tasks import execute_pipeline_task
 from app.metrics_service import calculate_metrics
-
+from app.control_plane.routes import router as control_plane_router
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="Intelligent CI/CD Platform",
+    title="PlatformIQ(Formerly Intelligent CI/CD Platform)",
     description="A mini DevOps control plane with pipeline tracking, logs, AI failure analysis, and quality gates.",
     version="1.0.0"
 )
@@ -36,6 +36,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(control_plane_router)
 
 
 def safe_json_loads(value, fallback):
