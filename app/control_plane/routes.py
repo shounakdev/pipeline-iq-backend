@@ -32,7 +32,7 @@ from app.schemas import (
 from app.tasks import execute_pipeline_task
 
 
-router = APIRouter(prefix="/platform", tags=["PlatformIQ Control Plane"])
+router = APIRouter(tags=["PlatformIQ Control Plane"])
 
 
 @router.post("/projects", response_model=ProjectResponse)
@@ -111,7 +111,7 @@ def create_service(
         action="SERVICE_CREATED",
         entity_type="Service",
         entity_id=service.id,
-        actor_id=request.owner,
+        actor_id=None,
         details={
             "project_id": project_id,
             "name": service.name,

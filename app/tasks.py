@@ -7,6 +7,7 @@ from app.models import Pipeline, PipelineLog, Analysis
 from app.executor import execute_node_pipeline
 from app.sonar_service import get_sonar_report
 from app.ai_analyzer import analyze_pipeline_report
+from app.shared.log_sanitizer import sanitize_log_text
 
 
 def update_pipeline_fields(pipeline_id: str, **fields):
@@ -48,6 +49,7 @@ def update_pipeline_fields(pipeline_id: str, **fields):
 
 
 def add_log_safe(pipeline_id: str, message: str):
+    safe_message = sanitize_log_text(message)
     """
     Save a pipeline log using a fresh DB session.
 

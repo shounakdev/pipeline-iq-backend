@@ -2,6 +2,7 @@ import os
 import subprocess
 import requests
 from dotenv import load_dotenv
+from app.shared.log_sanitizer import sanitize_log_text
 
 load_dotenv()
 
@@ -69,7 +70,7 @@ def run_sonar_scan(repo_path: str, project_key: str | None = None, log_fn=None):
         
     ]
 
-    command_text = " ".join(command)
+    command_text = sanitize_log_text(" ".join(command))
 
     if log_fn:
         log_fn(f"$ {command_text}")
@@ -97,7 +98,7 @@ def run_sonar_scan(repo_path: str, project_key: str | None = None, log_fn=None):
         output = output.strip()
 
         if output and log_fn:
-            log_fn(output)
+            log_fn(sanitize_log_text(output))
 
         return {
             "success": result.returncode == 0,
@@ -111,7 +112,7 @@ def run_sonar_scan(repo_path: str, project_key: str | None = None, log_fn=None):
         message = "SonarQube scan timed out."
 
         if log_fn:
-            log_fn(message)
+            log_fn(sanitize_log_text(message))
 
         return {
             "success": False,

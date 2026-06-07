@@ -16,13 +16,13 @@ def create_audit_event(
     details: Optional[dict[str, Any]] = None,
 ) -> AuditEvent:
     audit_event = AuditEvent(
-        id=str(uuid4()),
-        actor_id=actor_id,
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        details_json=json.dumps(details or {}, default=str),
-    )
+    id=str(uuid4()),
+    actor_id=actor_id,
+    action=action,
+    entity_type=entity_type,
+    entity_id=entity_id,
+    details=json.dumps(details),
+)
 
     db.add(audit_event)
     return audit_event

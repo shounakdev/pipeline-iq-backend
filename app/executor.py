@@ -2,10 +2,11 @@ import os
 import subprocess
 import tempfile
 from app.sonar_service import run_sonar_scan
+from app.shared.log_sanitizer import sanitize_log_text, sanitize_log_lines
 
 
 def run_command(command: list[str], cwd: str | None = None, log_fn=None, timeout: int = 180):
-    command_text = " ".join(command)
+    command_text = sanitize_log_text(" ".join(command))
 
     if log_fn:
         log_fn(f"$ {command_text}")
@@ -31,7 +32,7 @@ def run_command(command: list[str], cwd: str | None = None, log_fn=None, timeout
             output += result.stderr
 
         if output.strip() and log_fn:
-            log_fn(output.strip())
+            log_fn(sanitize_log_text(output.strip()))
 
         return {
             "success": result.returncode == 0,
@@ -43,7 +44,7 @@ def run_command(command: list[str], cwd: str | None = None, log_fn=None, timeout
         output = f"Command timed out: {command_text}"
 
         if log_fn:
-            log_fn(output)
+            log_fn(sanitize_log_text(output))
 
         return {
             "success": False,
@@ -68,7 +69,7 @@ def execute_node_pipeline(repo_url: str, branch: str):
         if logs and logs[-1] == clean_message:
             return
 
-        logs.append(clean_message)
+        logs.append(sanitize_log_text(clean_message))
 
     log("Starting real Node.js pipeline execution...")
     log(f"Repo: {repo_url}")
@@ -195,6 +196,6 @@ def execute_node_pipeline(repo_url: str, branch: str):
 
         return {
             "success": True,
-            "logs": logs,
+            "logs": sanitize_log_lines(logs),
             "failure_reason": None,
         }

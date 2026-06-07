@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
+from app.shared.log_sanitizer import sanitize_log_text
 
 
 class PipelineExecutionError(Exception):
@@ -11,13 +12,16 @@ class PipelineExecutionError(Exception):
 
 
 def _emit(logs, text, on_log=None):
-    logs.append(text)
+    safe_text = sanitize_log_text(text)
+
+    logs.append(safe_text)
+
     if on_log:
         on_log("".join(logs))
 
 
 def _run_command(command, cwd, logs, timeout_seconds=900, env=None, on_log=None):
-    command_text = " ".join(command)
+    command_text = sanitize_log_text(" ".join(command))
     _emit(logs, f"\n$ {command_text}\n", on_log)
 
     try:
