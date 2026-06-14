@@ -1,0 +1,101 @@
+def calculate_release_risk(*args, **kwargs) -> dict:
+    """
+    Supports both:
+    calculate_release_risk(payload_dict)
+    calculate_release_risk(build_status=..., trivy_status=...)
+    """
+
+    if args and isinstance(args[0], dict):
+        payload = args[0]
+    else:
+        payload = kwargs
+
+    build_status = payload.get("build_status")
+    test_status = payload.get("test_status")
+    sonar_status = payload.get("sonar_status")
+    trivy_status = payload.get("trivy_status")
+
+    trivy_critical = int(payload.get("trivy_critical") or 0)
+    trivy_high = int(payload.get("trivy_high") or 0)
+    trivy_medium = int(payload.get("trivy_medium") or 0)
+
+    vulnerabilities = int(payload.get("vulnerabilities") or 0)
+    bugs = int(payload.get("bugs") or 0)
+
+    coverage = payload.get("coverage")
+    try:
+        coverage = float(coverage) if coverage is not None else None
+    except Exception:
+        coverage = None
+
+    score = 0
+    recommendations = []
+
+    if build_status == "FAILED":
+        score += 30
+        recommendations.append("Fix the build failure before release.")
+
+    if test_status == "FAILED":
+        score += 25
+        recommendations.append("Fix failing tests before release.")
+
+    if sonar_status == "FAILED":
+        score += 15
+        recommendations.append("Review SonarQube quality gate issues.")
+
+    if trivy_status in {"FAILED", "SKIPPED"}:
+        score += 10
+        recommendations.append("Ensure Trivy security scan runs successfully.")
+
+    if trivy_critical > 0:
+        score += min(40, trivy_critical * 20)
+        recommendations.append("Fix critical Trivy vulnerabilities immediately.")
+
+    if trivy_high > 0:
+        score += min(30, trivy_high * 10)
+        recommendations.append("Fix high severity Trivy vulnerabilities before release.")
+
+    if trivy_medium > 0:
+        score += min(15, trivy_medium * 3)
+        recommendations.append("Review medium severity Trivy vulnerabilities.")
+
+    if vulnerabilities > 0:
+        score += min(20, vulnerabilities * 5)
+        recommendations.append("Resolve reported dependency or code vulnerabilities.")
+
+    if bugs > 0:
+        score += min(15, bugs * 3)
+        recommendations.append("Fix reported bugs from static analysis.")
+
+    if coverage is not None and coverage < 50:
+        score += 10
+        recommendations.append("Improve test coverage for critical paths.")
+
+    score = min(score, 100)
+
+    if score >= 80:
+        level = "CRITICAL"
+    elif score >= 60:
+        level = "HIGH"
+    elif score >= 35:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    summary = (
+        f"Release risk is {level} with score {score}/100. "
+        f"Build={build_status}, Tests={test_status}, Sonar={sonar_status}, "
+        f"Trivy={trivy_status}, Trivy critical/high={trivy_critical}/{trivy_high}."
+    )
+
+    if not recommendations:
+        recommendations = [
+            "Release risk is low. Continue monitoring build, test, SonarQube, and Trivy results."
+        ]
+
+    return {
+        "risk_score": score,
+        "risk_level": level,
+        "risk_summary": summary,
+        "recommendations": recommendations,
+    }
