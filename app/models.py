@@ -1,6 +1,7 @@
 import uuid
 from sqlalchemy import Column, String, Text, DateTime, Float, ForeignKey, Integer, Boolean, JSON, Table
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 from sqlalchemy.sql import func
 from sqlalchemy.ext.mutable import MutableList, MutableDict
@@ -260,6 +261,91 @@ class PipelineRun(Base):
     duration_seconds = Column(Float, nullable=True)
     service = relationship("Service", back_populates="pipeline_runs")
     repository = relationship("Repository", back_populates="pipeline_runs")
+    
+
+class Deployment(Base):
+    __tablename__ = "deployments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    service_id = Column(String(36), ForeignKey("services.id"), nullable=False)
+    pipeline_run_id = Column(String(36), ForeignKey("pipeline_runs.id"), nullable=True)
+    environment_id = Column(String(36), ForeignKey("environments.id"), nullable=True)
+
+    commit_sha = Column(String(100), nullable=True)
+    image_tag = Column(String(255), nullable=False)
+    deployment_version = Column(String(50), nullable=True)
+
+    argo_sync_status = Column(String(50), nullable=True, default="UNKNOWN")
+    kubernetes_rollout_status = Column(String(50), nullable=True, default="UNKNOWN")
+
+    previous_revision = Column(String(100), nullable=True)
+
+    namespace = Column(String(100), nullable=True)
+    cluster_name = Column(String(100), nullable=True, default="kind-platformiq")
+    service_name = Column(String(150), nullable=True)
+    argo_application_name = Column(String(150), nullable=True)
+
+    pod_count = Column(Integer, nullable=True, default=0)
+    restart_count = Column(Integer, nullable=True, default=0)
+    failure_reason = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    deployed_at = Column(DateTime(timezone=True), nullable=True)
+
+    workloads = relationship(
+        "KubernetesWorkload",
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+
+    revisions = relationship(
+        "DeploymentRevision",
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+
+
+class KubernetesWorkload(Base):
+    __tablename__ = "kubernetes_workloads"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id"), nullable=False)
+
+    workload_name = Column(String(150), nullable=False)
+    namespace = Column(String(100), nullable=False)
+    kind = Column(String(50), nullable=False)
+
+    desired_replicas = Column(Integer, nullable=True, default=0)
+    available_replicas = Column(Integer, nullable=True, default=0)
+    pod_count = Column(Integer, nullable=True, default=0)
+    restart_count = Column(Integer, nullable=True, default=0)
+
+    status = Column(String(50), nullable=True, default="UNKNOWN")
+    failure_reason = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    deployment = relationship("Deployment", back_populates="workloads")
+
+
+class DeploymentRevision(Base):
+    __tablename__ = "deployment_revisions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id"), nullable=False)
+
+    revision = Column(String(100), nullable=True)
+    image_tag = Column(String(255), nullable=True)
+    commit_sha = Column(String(100), nullable=True)
+    status = Column(String(50), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    deployed_at = Column(DateTime(timezone=True), nullable=True)
+
+    deployment = relationship("Deployment", back_populates="revisions")
 
 
 class AuditEvent(Base):

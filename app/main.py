@@ -17,6 +17,8 @@ from app.tasks import execute_pipeline_task
 from app.metrics_service import calculate_metrics
 from app.control_plane.routes import router as control_plane_router
 
+from app.deployments.router import router as deployments_router
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -43,6 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(control_plane_router)
+app.include_router(deployments_router)
 
 
 def safe_json_loads(value, fallback):

@@ -12,10 +12,29 @@ if not DATABASE_URL:
 
 
 def ensure_sslmode(url: str) -> str:
-    if url.startswith("postgresql") and "sslmode=" not in url:
-        separator = "&" if "?" in url else "?"
-        return f"{url}{separator}sslmode=require"
-    return url
+    """
+    Cloud Postgres like Neon usually needs sslmode=require.
+    Local Docker/Postgres should use sslmode=disable.
+    If sslmode is already present in DATABASE_URL, respect it.
+    """
+    if not url.startswith("postgresql"):
+        return url
+
+    if "sslmode=" in url:
+        return url
+
+    separator = "&" if "?" in url else "?"
+
+    local_hosts = [
+        "localhost",
+        "127.0.0.1",
+        "platformiq-postgres",
+    ]
+
+    if any(host in url for host in local_hosts):
+        return f"{url}{separator}sslmode=disable"
+
+    return f"{url}{separator}sslmode=require"
 
 
 DATABASE_URL = ensure_sslmode(DATABASE_URL)

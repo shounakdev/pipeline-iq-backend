@@ -1,11 +1,14 @@
 from tests.conftest import register_user, login_user, auth_headers
 from app.models import Role
 
+import uuid
 
 def test_register_user(client):
+    email = f"admin-{uuid.uuid4()}@example.com"
+
     response = register_user(
         client,
-        "admin@example.com",
+        email,
         "admin123",
         "admin",
     )
@@ -15,7 +18,7 @@ def test_register_user(client):
     data = response.json()
     user_data = data.get("user", data)
 
-    assert user_data["email"] == "admin@example.com"
+    assert user_data["email"] == email
     assert user_data["role"] == "admin"
 
 
