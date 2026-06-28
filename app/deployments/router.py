@@ -9,6 +9,13 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Deployment, KubernetesWorkload, DeploymentRevision
 
+from app.events.constants import (
+    DEPLOYMENT_STARTED,
+    DEPLOYMENT_COMPLETED,
+    DEPLOYMENT_FAILED,
+)
+from app.events.service import record_platform_event
+
 
 router = APIRouter(prefix="/api", tags=["deployments"])
 
@@ -124,6 +131,25 @@ def create_deployment(
 
     db.add(revision)
 
+    record_platform_event(
+        db,
+        event_type=DEPLOYMENT_STARTED,
+        correlation_id=str(deployment.pipeline_run_id or deployment.id),
+        service_id=str(deployment.service_id),
+        environment=getattr(deployment, "environment", None) or "staging",
+        payload={
+            "deployment_id": str(deployment.id),
+            "pipeline_run_id": str(deployment.pipeline_run_id)
+            if deployment.pipeline_run_id
+            else None,
+            "image_tag": deployment.image_tag,
+            "deployment_version": deployment.deployment_version,
+            "namespace": deployment.namespace,
+            "cluster_name": deployment.cluster_name,
+            "argo_application_name": deployment.argo_application_name,
+        },
+    )
+
     db.commit()
     db.refresh(deployment)
 
@@ -225,12 +251,86 @@ def create_deployment_workload(
         **request.model_dump(),
     )
 
+    previous_rollout_status = (
+        deployment.kubernetes_rollout_status or "UNKNOWN"
+    ).upper()
+
+    requested_status = (request.status or "UNKNOWN").upper()
+
     deployment.pod_count = request.pod_count
     deployment.restart_count = request.restart_count
-    deployment.kubernetes_rollout_status = request.status
 
-    if request.failure_reason:
-        deployment.failure_reason = request.failure_reason
+    failed_statuses = {
+        "FAILED",
+        "FAILURE",
+        "ERROR",
+        "UNHEALTHY",
+        "DEGRADED",
+        "CRASHLOOPBACKOFF",
+        "IMAGEPULLBACKOFF",
+    }
+
+    completed_statuses = {
+        "HEALTHY",
+        "SUCCESS",
+        "SUCCEEDED",
+        "READY",
+        "AVAILABLE",
+        "SYNCED",
+    }
+
+    if request.failure_reason or requested_status in failed_statuses:
+        deployment.kubernetes_rollout_status = "FAILED"
+        deployment.failure_reason = (
+            request.failure_reason
+            or f"Workload {request.workload_name} reported status {request.status}"
+        )
+
+        if previous_rollout_status != "FAILED":
+            record_platform_event(
+                db,
+                event_type=DEPLOYMENT_FAILED,
+                correlation_id=str(deployment.pipeline_run_id or deployment.id),
+                service_id=str(deployment.service_id),
+                environment=getattr(deployment, "environment", None) or "staging",
+                payload={
+                    "deployment_id": str(deployment.id),
+                    "pipeline_run_id": str(deployment.pipeline_run_id)
+                    if deployment.pipeline_run_id
+                    else None,
+                    "image_tag": deployment.image_tag,
+                    "argo_sync_status": deployment.argo_sync_status,
+                    "kubernetes_rollout_status": deployment.kubernetes_rollout_status,
+                    "failure_reason": deployment.failure_reason,
+                },
+            )
+
+    elif requested_status in completed_statuses:
+        deployment.argo_sync_status = "SYNCED"
+        deployment.kubernetes_rollout_status = "HEALTHY"
+
+        if previous_rollout_status != "HEALTHY":
+            record_platform_event(
+                db,
+                event_type=DEPLOYMENT_COMPLETED,
+                correlation_id=str(deployment.pipeline_run_id or deployment.id),
+                service_id=str(deployment.service_id),
+                environment=getattr(deployment, "environment", None) or "staging",
+                payload={
+                    "deployment_id": str(deployment.id),
+                    "pipeline_run_id": str(deployment.pipeline_run_id)
+                    if deployment.pipeline_run_id
+                    else None,
+                    "image_tag": deployment.image_tag,
+                    "argo_sync_status": deployment.argo_sync_status,
+                    "kubernetes_rollout_status": deployment.kubernetes_rollout_status,
+                    "pod_count": deployment.pod_count,
+                    "restart_count": deployment.restart_count,
+                },
+            )
+
+    else:
+        deployment.kubernetes_rollout_status = request.status
 
     db.add(workload)
     db.commit()

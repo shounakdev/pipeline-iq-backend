@@ -1,6 +1,9 @@
 from datetime import datetime
 from uuid import uuid4
 
+from app.events.constants import PIPELINE_STARTED
+from app.events.service import record_platform_event
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -321,6 +324,25 @@ def trigger_service_pipeline(
     )
 
     db.add(pipeline)
+    
+    
+    record_platform_event(
+        db,
+        event_type=PIPELINE_STARTED,
+        correlation_id=str(pipeline.id),
+        service_id=str(service.id),
+        environment="staging",
+        payload={
+            "pipeline_run_id": str(pipeline.id),
+            "repo_url": pipeline.repo_url,
+            "branch": pipeline.branch,
+            "status": pipeline.status,
+            "stage": getattr(pipeline, "stage", None),
+            "project_id": str(project_id),
+            "service_id": str(service_id),
+            "repository_id": str(repository.id),
+        },
+    )
 
     create_audit_event(
         db=db,

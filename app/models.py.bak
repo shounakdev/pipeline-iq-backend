@@ -1,24 +1,11 @@
 import uuid
-from datetime import datetime, timezone
-
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    Float,
-    ForeignKey,
-    Index,
-    Integer,
-    JSON,
-    String,
-    Table,
-    Text,
-    UniqueConstraint,
-)
-from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.ext.mutable import MutableDict, MutableList
+from sqlalchemy import Column, String, Text, DateTime, Float, ForeignKey, Integer, Boolean, JSON, Table
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID
+from datetime import datetime
+from sqlalchemy.sql import func
+from sqlalchemy.ext.mutable import MutableList, MutableDict
+
 
 from app.database import Base
 
@@ -34,7 +21,7 @@ class Pipeline(Base):
 
     progress = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
-
+    
     stage = Column(String, default="QUEUED")
     failure_reason = Column(Text, nullable=True)
 
@@ -56,14 +43,16 @@ class Pipeline(Base):
     quality_score = Column(Float, nullable=True)
     coverage = Column(Float, nullable=True)
 
+    # Detailed SonarQube metrics
     bugs = Column(Integer, default=0)
     vulnerabilities = Column(Integer, default=0)
     code_smells = Column(Integer, default=0)
     duplicated_lines_density = Column(Float, nullable=True)
     quality_gate = Column(String, nullable=True)
     sonar_report_url = Column(Text, nullable=True)
+    #sonar_issues_json = Column(Text, nullable=True)
     sonar_issues = Column(JSON, nullable=True)
-
+    
     trivy_critical = Column(Integer, default=0)
     trivy_high = Column(Integer, default=0)
     trivy_medium = Column(Integer, default=0)
@@ -71,25 +60,25 @@ class Pipeline(Base):
     trivy_unknown = Column(Integer, default=0)
     trivy_total = Column(Integer, default=0)
     trivy_report = Column(JSON, nullable=True)
-
+    
     risk_score = Column(Float, nullable=True)
     risk_level = Column(String, nullable=True)
     risk_summary = Column(Text, nullable=True)
-
+    
     ai_summary = Column(Text, nullable=True)
     recommendations = Column(JSON, nullable=True)
 
     logs = relationship(
         "PipelineLog",
         back_populates="pipeline",
-        cascade="all, delete-orphan",
+        cascade="all, delete-orphan"
     )
 
     analysis = relationship(
         "Analysis",
         back_populates="pipeline",
         uselist=False,
-        cascade="all, delete-orphan",
+        cascade="all, delete-orphan"
     )
 
 
@@ -114,12 +103,14 @@ class Analysis(Base):
     confidence = Column(Float, nullable=True)
     suggestion = Column(Text, nullable=True)
 
+    # AI summary / final analysis fields
     final_status = Column(String, nullable=True)
     report_json = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
     pipeline = relationship("Pipeline", back_populates="analysis")
+    
 
 
 def generate_uuid():
@@ -268,10 +259,9 @@ class PipelineRun(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Float, nullable=True)
-
     service = relationship("Service", back_populates="pipeline_runs")
     repository = relationship("Repository", back_populates="pipeline_runs")
-
+    
 
 class Deployment(Base):
     __tablename__ = "deployments"
@@ -368,146 +358,3 @@ class AuditEvent(Base):
     entity_id = Column(String, nullable=True)
     details = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class EventRecord(Base):
-    __tablename__ = "event_records"
-
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    event_id = Column(String, nullable=False, unique=True, index=True)
-    event_type = Column(String, nullable=False, index=True)
-    schema_version = Column(String, nullable=True)
-
-    topic = Column(String, nullable=False, index=True)
-    correlation_id = Column(String, nullable=True, index=True)
-    service_id = Column(String, nullable=True, index=True)
-    environment = Column(String, nullable=True, index=True)
-
-    timestamp = Column(DateTime(timezone=True), nullable=True, index=True)
-
-    payload = Column(JSON, nullable=False, default=dict)
-    raw_event = Column(JSON, nullable=False, default=dict)
-
-    processing_status = Column(
-        String,
-        nullable=False,
-        default="PROCESSED",
-        index=True,
-    )
-    processing_error = Column(Text, nullable=True)
-
-    created_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-    )
-
-    processed_at = Column(DateTime(timezone=True), nullable=True)
-
-
-Index(
-    "ix_event_records_release_timeline",
-    EventRecord.correlation_id,
-    EventRecord.timestamp,
-)
-
-
-class OutboxEvent(Base):
-    __tablename__ = "outbox_events"
-
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    event_id = Column(String, unique=True, index=True, nullable=False)
-    topic = Column(String, index=True, nullable=False)
-    event_type = Column(String, index=True, nullable=False)
-    schema_version = Column(String, nullable=False, default="1.0")
-
-    correlation_id = Column(String, index=True, nullable=True)
-    service_id = Column(String, index=True, nullable=True)
-    environment = Column(String, index=True, nullable=True)
-
-    payload = Column(JSONB, nullable=False, default=dict)
-
-    status = Column(String, index=True, nullable=False, default="PENDING")
-    retry_count = Column(Integer, nullable=False, default=0)
-    last_error = Column(Text, nullable=True)
-
-    published_at = Column(DateTime(timezone=True), nullable=True)
-
-    created_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-    )
-
-    updated_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-
-class ConsumerCheckpoint(Base):
-    __tablename__ = "consumer_checkpoints"
-
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    consumer_name = Column(String, nullable=False)
-    topic = Column(String, nullable=False)
-    partition = Column(Integer, nullable=False)
-    offset = Column(Integer, nullable=False)
-
-    updated_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "consumer_name",
-            "topic",
-            "partition",
-            name="uq_consumer_topic_partition",
-        ),
-    )
-
-
-class DeadLetterEvent(Base):
-    __tablename__ = "dead_letter_events"
-
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    event_id = Column(String, nullable=False, unique=True, index=True)
-    event_type = Column(String, nullable=True, index=True)
-    topic = Column(String, nullable=True, index=True)
-
-    correlation_id = Column(String, nullable=True, index=True)
-    service_id = Column(String, nullable=True, index=True)
-    environment = Column(String, nullable=True, index=True)
-
-    raw_event = Column(JSON, nullable=True)
-    payload = Column(JSON, nullable=True)
-
-    error_reason = Column(Text, nullable=False)
-    status = Column(String, nullable=False, default="OPEN", index=True)
-
-    retry_count = Column(Integer, nullable=False, default=0)
-
-    created_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-    )
-
-    updated_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-    last_retry_at = Column(DateTime(timezone=True), nullable=True)

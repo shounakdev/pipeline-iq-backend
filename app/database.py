@@ -1,7 +1,9 @@
 import os
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
 
@@ -13,28 +15,37 @@ if not DATABASE_URL:
 
 def ensure_sslmode(url: str) -> str:
     """
-    Cloud Postgres like Neon usually needs sslmode=require.
+    Cloud Postgres usually needs sslmode=require.
     Local Docker/Postgres should use sslmode=disable.
     If sslmode is already present in DATABASE_URL, respect it.
     """
+
     if not url.startswith("postgresql"):
         return url
 
-    if "sslmode=" in url:
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query))
+
+    if "sslmode" in query:
         return url
 
-    separator = "&" if "?" in url else "?"
-
-    local_hosts = [
+    local_hosts = {
         "localhost",
         "127.0.0.1",
+        "postgres",
+        "cicd_postgres",
         "platformiq-postgres",
-    ]
+        "host.docker.internal",
+    }
 
-    if any(host in url for host in local_hosts):
-        return f"{url}{separator}sslmode=disable"
+    if parsed.hostname in local_hosts:
+        query["sslmode"] = "disable"
+    else:
+        query["sslmode"] = "require"
 
-    return f"{url}{separator}sslmode=require"
+    new_query = urlencode(query)
+
+    return urlunparse(parsed._replace(query=new_query))
 
 
 DATABASE_URL = ensure_sslmode(DATABASE_URL)

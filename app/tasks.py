@@ -12,6 +12,9 @@ from app.sonar_service import get_sonar_report
 from app.ai_analyzer import analyze_pipeline_report
 from app.shared.log_sanitizer import sanitize_log_text
 
+from app.events.constants import PIPELINE_COMPLETED, PIPELINE_FAILED
+from app.events.service import record_platform_event
+
 try:
     from app.pipelineiq.security.trivy_scan import (
         run_trivy_filesystem_scan,
@@ -71,6 +74,61 @@ def update_pipeline_fields(pipeline_id: str, **fields):
     except Exception:
         db.rollback()
         raise
+
+    finally:
+        db.close()
+
+
+
+def emit_pipeline_terminal_event(pipeline_id: str, event_type: str):
+    """
+    Record PIPELINE_COMPLETED / PIPELINE_FAILED into the transactional outbox.
+
+    This uses a fresh DB session because the worker helper functions in this file
+    also use short-lived sessions.
+    """
+    db = SessionLocal()
+
+    try:
+        pipeline = (
+            db.query(Pipeline)
+            .filter(Pipeline.id == str(pipeline_id))
+            .first()
+        )
+
+        if not pipeline:
+            return None
+
+        service_id = getattr(pipeline, "service_id", None)
+
+        event = record_platform_event(
+            db,
+            event_type=event_type,
+            correlation_id=str(pipeline.id),
+            service_id=str(service_id) if service_id else None,
+            environment=getattr(pipeline, "environment", None) or "staging",
+            payload={
+                "pipeline_run_id": str(pipeline.id),
+                "status": getattr(pipeline, "status", None),
+                "stage": getattr(pipeline, "stage", None),
+                "risk_score": getattr(pipeline, "risk_score", None),
+                "risk_level": getattr(pipeline, "risk_level", None),
+                "commit_sha": getattr(pipeline, "commit_sha", None),
+                "build_status": getattr(pipeline, "build_status", None),
+                "test_status": getattr(pipeline, "test_status", None),
+                "sonar_status": getattr(pipeline, "sonar_status", None),
+                "trivy_status": getattr(pipeline, "trivy_status", None),
+                "failure_reason": getattr(pipeline, "failure_reason", None),
+            },
+        )
+
+        db.commit()
+        return event
+
+    except Exception as exc:
+        db.rollback()
+        print(f"Failed to record {event_type} for pipeline {pipeline_id}: {exc}")
+        return None
 
     finally:
         db.close()
@@ -587,6 +645,8 @@ def mark_stale_running_pipelines_failed(timeout_minutes: int = 45):
             "Pipeline marked as failed because it was stuck in RUNNING state.",
         )
 
+        emit_pipeline_terminal_event(stale_pipeline_id, PIPELINE_FAILED)
+
     return len(stale_pipeline_ids)
 
 
@@ -779,6 +839,7 @@ def execute_pipeline_task(self, pipeline_id: str):
             )
 
             add_log_safe(pipeline_id, "Pipeline completed successfully.")
+            emit_pipeline_terminal_event(pipeline_id, PIPELINE_COMPLETED)
 
             return {
                 "success": True,
@@ -823,6 +884,8 @@ def execute_pipeline_task(self, pipeline_id: str):
                 "issues": [],
             },
         )
+
+        emit_pipeline_terminal_event(pipeline_id, PIPELINE_FAILED)
 
         return {
             "success": False,
@@ -892,6 +955,8 @@ def execute_pipeline_task(self, pipeline_id: str):
                     "issues": [],
                 },
             )
+
+            emit_pipeline_terminal_event(pipeline_id, PIPELINE_FAILED)
 
         except Exception:
             pass

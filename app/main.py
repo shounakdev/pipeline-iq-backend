@@ -7,6 +7,12 @@ from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 from app.auth.router import router as auth_router
 
+from app.events.router import router as events_router
+
+
+from app.events.constants import PIPELINE_STARTED
+from app.events.service import record_platform_event
+
 from app.auth.dependencies import require_roles
 from app.models import User
 
@@ -19,6 +25,9 @@ from app.control_plane.routes import router as control_plane_router
 
 from app.deployments.router import router as deployments_router
 
+
+
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -26,7 +35,7 @@ app = FastAPI(
     description="A mini DevOps control plane with pipeline tracking, logs, AI failure analysis, and quality gates.",
     version="1.0.0"
 )
-
+app.include_router(events_router)
 app.include_router(auth_router)
 
 origins = [
@@ -88,6 +97,23 @@ def trigger_pipeline(
     )
 
     db.add(pipeline)
+    db.flush()
+    
+    record_platform_event(
+        db,
+        event_type=PIPELINE_STARTED,
+        correlation_id=str(pipeline.id),
+        service_id=None,
+        environment="staging",
+        payload={
+            "pipeline_run_id": str(pipeline.id),
+            "repo_url": pipeline.repo_url,
+            "branch": pipeline.branch,
+           "status": pipeline.status,
+            "stage": getattr(pipeline, "stage", None),
+        },
+)
+
     db.commit()
     db.refresh(pipeline)
 
