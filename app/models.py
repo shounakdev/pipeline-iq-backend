@@ -1,3 +1,4 @@
+import enum
 import uuid
 from datetime import datetime, timezone
 
@@ -5,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Enum,
     Float,
     ForeignKey,
     Index,
@@ -14,8 +16,8 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    func,
 )
-from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import relationship
@@ -186,6 +188,58 @@ class Service(Base):
     environments = relationship("Environment", back_populates="service")
     repositories = relationship("Repository", back_populates="service")
     pipeline_runs = relationship("PipelineRun", back_populates="service")
+    health_snapshots = relationship(
+        "ServiceHealthSnapshot",
+        back_populates="service",
+        cascade="all, delete-orphan",
+    )
+
+
+class ServiceHealthStatus(str, enum.Enum):
+    HEALTHY = "HEALTHY"
+    DEGRADED = "DEGRADED"
+    UNHEALTHY = "UNHEALTHY"
+    UNKNOWN = "UNKNOWN"
+
+
+class ServiceHealthSnapshot(Base):
+    __tablename__ = "service_health_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    service_id = Column(
+        String,
+        ForeignKey("services.id"),
+        nullable=False,
+        index=True,
+    )
+    service_name = Column(String, nullable=False, index=True)
+
+    environment = Column(String, nullable=False, default="staging")
+    status = Column(
+        Enum(ServiceHealthStatus),
+        nullable=False,
+        default=ServiceHealthStatus.UNKNOWN,
+    )
+
+    latency_ms = Column(Float, nullable=True)
+    error_rate = Column(Float, nullable=True)
+    cpu_usage = Column(Float, nullable=True)
+    memory_usage = Column(Float, nullable=True)
+
+    pod_restart_count = Column(Integer, nullable=True)
+    replica_count = Column(Integer, nullable=True)
+    available_replicas = Column(Integer, nullable=True)
+
+    source = Column(String, nullable=False, default="prometheus")
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    service = relationship("Service", back_populates="health_snapshots")
 
 
 class Environment(Base):
@@ -511,3 +565,86 @@ class DeadLetterEvent(Base):
     )
 
     last_retry_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class IncidentSeverity(str, enum.Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class IncidentStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    RESOLVED = "RESOLVED"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+
+
+class Incident(Base):
+    __tablename__ = "incidents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+
+    severity = Column(
+        Enum(IncidentSeverity, name="incidentseverity"),
+        nullable=False,
+        index=True,
+    )
+
+    status = Column(
+        Enum(IncidentStatus, name="incidentstatus"),
+        nullable=False,
+        default=IncidentStatus.OPEN,
+        index=True,
+    )
+
+    service_id = Column(String, nullable=False, index=True)
+    environment = Column(String, nullable=False, index=True)
+
+    correlation_id = Column(String, nullable=False, index=True)
+    triggered_by_event_id = Column(String, nullable=True, index=True)
+
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    events = relationship(
+        "IncidentEvent",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+    )
+
+
+class IncidentEvent(Base):
+    __tablename__ = "incident_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    incident_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    event_type = Column(String, nullable=False, index=True)
+    message = Column(Text, nullable=True)
+
+    # Important: SQLAlchemy reserves the name "metadata".
+    # The Python attribute is event_metadata, but the DB column is metadata.
+    event_metadata = Column("metadata", JSON, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    incident = relationship("Incident", back_populates="events")

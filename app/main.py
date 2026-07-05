@@ -1,31 +1,31 @@
 import json
 import os
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
-from uuid import uuid4
+import time
+
 from datetime import datetime
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.auth.router import router as auth_router
-
-from app.events.router import router as events_router
-
-
-from app.events.constants import PIPELINE_STARTED
-from app.events.service import record_platform_event
+from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
-from app.models import User
-
-from app.database import Base, engine, get_db
-from app.models import Pipeline, PipelineLog, Analysis
-from app.schemas import PipelineTriggerRequest, PipelineResponse
-from app.tasks import execute_pipeline_task
-from app.metrics_service import calculate_metrics
+from app.auth.router import router as auth_router
 from app.control_plane.routes import router as control_plane_router
-
+from app.database import Base, engine, get_db
 from app.deployments.router import router as deployments_router
-
-
+from app.events.constants import PIPELINE_STARTED
+from app.events.router import router as events_router
+from app.events.service import record_platform_event
+from app.incidents.incident_router import router as incidents_router
+from app.incidents.incident_router import service_runtime_router
+from app.metrics_service import calculate_metrics
+from app.models import Analysis, Pipeline, PipelineLog, User
+from app.observability.health_router import router as health_router
+from app.observability.metrics import API_REQUEST_DURATION_SECONDS
+from app.observability.metrics_router import router as metrics_router
+from app.schemas import PipelineTriggerRequest
+from app.tasks import execute_pipeline_task
 
 
 Base.metadata.create_all(bind=engine)
@@ -33,10 +33,9 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="PlatformIQ(Formerly Intelligent CI/CD Platform)",
     description="A mini DevOps control plane with pipeline tracking, logs, AI failure analysis, and quality gates.",
-    version="1.0.0"
+    version="1.0.0",
 )
-app.include_router(events_router)
-app.include_router(auth_router)
+
 
 origins = [
     "http://localhost:3000",
@@ -53,8 +52,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(incidents_router)
+app.include_router(service_runtime_router)
+app.include_router(metrics_router)
+app.include_router(health_router)
+app.include_router(events_router)
+app.include_router(auth_router)
 app.include_router(control_plane_router)
 app.include_router(deployments_router)
+
+
+@app.middleware("http")
+async def prometheus_metrics_middleware(request: Request, call_next):
+    start_time = time.perf_counter()
+
+    response = await call_next(request)
+
+    duration = time.perf_counter() - start_time
+
+    route = request.scope.get("route")
+    path = getattr(route, "path", request.url.path)
+
+    API_REQUEST_DURATION_SECONDS.labels(
+        method=request.method,
+        path=path,
+        status_code=str(response.status_code),
+    ).observe(duration)
+
+    return response
 
 
 def safe_json_loads(value, fallback):
@@ -85,6 +112,7 @@ def trigger_pipeline(
             "branch": request.branch,
             "status": "PENDING",
         }
+
     pipeline_id = str(uuid4())
 
     pipeline = Pipeline(
@@ -93,12 +121,12 @@ def trigger_pipeline(
         branch=request.branch,
         status="PENDING",
         created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        updated_at=datetime.utcnow(),
     )
 
     db.add(pipeline)
     db.flush()
-    
+
     record_platform_event(
         db,
         event_type=PIPELINE_STARTED,
@@ -109,10 +137,10 @@ def trigger_pipeline(
             "pipeline_run_id": str(pipeline.id),
             "repo_url": pipeline.repo_url,
             "branch": pipeline.branch,
-           "status": pipeline.status,
+            "status": pipeline.status,
             "stage": getattr(pipeline, "stage", None),
         },
-)
+    )
 
     db.commit()
     db.refresh(pipeline)
@@ -121,12 +149,12 @@ def trigger_pipeline(
         args=[pipeline_id],
         queue="pipeline_queue",
         ignore_result=True,
-)
+    )
 
     return {
         "pipeline_id": pipeline_id,
         "status": "PENDING",
-        "message": "Pipeline triggered successfully"
+        "message": "Pipeline triggered successfully",
     }
 
 
@@ -214,9 +242,13 @@ def get_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             "confidence": analysis.confidence if analysis else None,
             "suggestion": analysis.suggestion if analysis else None,
             "final_status": analysis.final_status if analysis else None,
-            "report_json": json.loads(analysis.report_json) if analysis and analysis.report_json else None,
+            "report_json": json.loads(analysis.report_json)
+            if analysis and analysis.report_json
+            else None,
         },
     }
+
+
 @app.get("/pipelines")
 def list_pipelines(
     status: str | None = None,
@@ -288,6 +320,7 @@ def list_pipelines(
         for p in pipelines
     ]
 
-@app.get("/metrics")
+
+@app.get("/platform/metrics")
 def get_metrics(db: Session = Depends(get_db)):
     return calculate_metrics(db)
