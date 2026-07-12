@@ -19,42 +19,121 @@ ACTIVE_INCIDENT_STATUSES = [
     IncidentStatus.ACKNOWLEDGED,
 ]
 
+RELIABILITY_ALERT_TITLES = {
+    "SLO_BREACH": "SLO breach",
+    "AVAILABILITY_BREACH": "availability SLO breach",
+    "LATENCY_BREACH": "latency SLO breach",
+    "ERROR_RATE_BREACH": "error-rate SLO breach",
+    "ERROR_BUDGET_BURN": "rapid error-budget burn",
+    "ERROR_BUDGET_EXHAUSTED": "error budget exhausted",
+}
+
 
 def _severity_from_alert(alert_severity: str | None) -> IncidentSeverity:
-    if alert_severity == "CRITICAL":
+    normalized_severity = str(alert_severity or "LOW").upper()
+
+    if normalized_severity == "CRITICAL":
         return IncidentSeverity.CRITICAL
-    if alert_severity == "HIGH":
+    if normalized_severity == "HIGH":
         return IncidentSeverity.HIGH
-    if alert_severity == "MEDIUM":
+    if normalized_severity == "MEDIUM":
         return IncidentSeverity.MEDIUM
     return IncidentSeverity.LOW
 
 
 def _build_correlation_id(alert_event: dict[str, Any]) -> str:
-    service_id = alert_event.get("service_id")
-    environment = alert_event.get("environment", "unknown")
-    event_type = alert_event.get("event_type", "UNKNOWN_ALERT")
+    payload = alert_event.get("payload") or {}
 
-    return alert_event.get("correlation_id") or f"{service_id}:{environment}:{event_type}"
+    service_id = (
+        alert_event.get("service_id")
+        or payload.get("service_id")
+        or "unknown-service"
+    )
+    environment = (
+        alert_event.get("environment")
+        or payload.get("environment")
+        or "unknown"
+    )
+    event_type = (
+        alert_event.get("event_type")
+        or payload.get("event_type")
+        or "UNKNOWN_ALERT"
+    )
+
+    correlation_id = (
+        alert_event.get("correlation_id")
+        or payload.get("correlation_id")
+    )
+
+    return correlation_id or f"{service_id}:{environment}:{event_type}"
 
 
-def _build_title(alert_event: dict[str, Any]) -> str:
-    service_name = alert_event.get("service_name") or alert_event.get("service_id")
-    environment = alert_event.get("environment", "unknown")
-    event_type = alert_event.get("event_type", "UNKNOWN_ALERT")
+def _build_title(
+    alert_event: dict[str, Any],
+    service_name: str | None = None,
+) -> str:
+    payload = alert_event.get("payload") or {}
 
-    readable = event_type.replace("_", " ").title()
-    return f"{service_name} {readable.lower()} in {environment}"
+    resolved_service_name = (
+        service_name
+        or alert_event.get("service_name")
+        or payload.get("service_name")
+        or alert_event.get("service_id")
+        or payload.get("service_id")
+        or "unknown-service"
+    )
+    environment = (
+        alert_event.get("environment")
+        or payload.get("environment")
+        or "unknown"
+    )
+    event_type = str(
+        alert_event.get("event_type")
+        or payload.get("event_type")
+        or "UNKNOWN_ALERT"
+    )
+
+    alert_label = RELIABILITY_ALERT_TITLES.get(
+        event_type,
+        event_type.replace("_", " ").lower(),
+    )
+
+    return f"{resolved_service_name} {alert_label} in {environment}"
 
 
-def _build_description(alert_event: dict[str, Any]) -> str:
-    service_name = alert_event.get("service_name") or alert_event.get("service_id")
-    environment = alert_event.get("environment", "unknown")
-    event_type = alert_event.get("event_type", "UNKNOWN_ALERT")
+def _build_description(
+    alert_event: dict[str, Any],
+    service_name: str | None = None,
+) -> str:
+    payload = alert_event.get("payload") or {}
+
+    resolved_service_name = (
+        service_name
+        or alert_event.get("service_name")
+        or payload.get("service_name")
+        or alert_event.get("service_id")
+        or payload.get("service_id")
+        or "unknown-service"
+    )
+    environment = (
+        alert_event.get("environment")
+        or payload.get("environment")
+        or "unknown"
+    )
+    event_type = str(
+        alert_event.get("event_type")
+        or payload.get("event_type")
+        or "UNKNOWN_ALERT"
+    )
+
+    alert_label = RELIABILITY_ALERT_TITLES.get(
+        event_type,
+        event_type.replace("_", " ").lower(),
+    )
 
     return (
-        f"Incident created from telemetry alert {event_type} "
-        f"for {service_name} in {environment}."
+        f"Incident created from telemetry alert {alert_label} "
+        f"for {resolved_service_name} in {environment}."
     )
 
 
@@ -120,6 +199,40 @@ def create_or_update_incident_from_alert(
     we attach another incident event instead of creating duplicate incidents.
     """
 
+    payload = alert_event.get("payload") or {}
+
+    severity_value = (
+        alert_event.get("severity")
+        or payload.get("severity")
+        or "HIGH"
+    )
+
+    service_id_value = (
+        alert_event.get("service_id")
+        or payload.get("service_id")
+        or "unknown-service"
+    )
+
+    service_name = (
+        alert_event.get("service_name")
+        or payload.get("service_name")
+        or alert_event.get("service_id")
+        or payload.get("service_id")
+        or "unknown-service"
+    )
+
+    environment = (
+        alert_event.get("environment")
+        or payload.get("environment")
+        or "unknown"
+    )
+
+    triggered_by_event_id = (
+        alert_event.get("event_id")
+        or payload.get("event_id")
+        or alert_event.get("id")
+    )
+
     correlation_id = _build_correlation_id(alert_event)
 
     incident = (
@@ -162,14 +275,14 @@ def create_or_update_incident_from_alert(
         return incident
 
     incident = Incident(
-        title=_build_title(alert_event),
-        description=_build_description(alert_event),
-        severity=_severity_from_alert(alert_event.get("severity")),
+        title=_build_title(alert_event, service_name),
+        description=_build_description(alert_event, service_name),
+        severity=_severity_from_alert(str(severity_value)),
         status=IncidentStatus.OPEN,
-        service_id=str(alert_event.get("service_id")),
-        environment=alert_event.get("environment", "unknown"),
+        service_id=str(service_id_value),
+        environment=str(environment),
         correlation_id=correlation_id,
-        triggered_by_event_id=alert_event.get("event_id"),
+        triggered_by_event_id=triggered_by_event_id,
         started_at=now,
         created_at=now,
         updated_at=now,

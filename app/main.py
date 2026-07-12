@@ -26,6 +26,7 @@ from app.observability.metrics import API_REQUEST_DURATION_SECONDS
 from app.observability.metrics_router import router as metrics_router
 from app.schemas import PipelineTriggerRequest
 from app.tasks import execute_pipeline_task
+from app.reliability.router import router as reliability_router
 
 
 Base.metadata.create_all(bind=engine)
@@ -62,6 +63,7 @@ app.include_router(events_router)
 app.include_router(auth_router)
 app.include_router(control_plane_router)
 app.include_router(deployments_router)
+app.include_router(reliability_router)
 
 
 @app.middleware("http")

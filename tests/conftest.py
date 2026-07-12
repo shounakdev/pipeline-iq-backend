@@ -2,91 +2,202 @@ import os
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine,text
-from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+# These values must be configured before importing anything from app.
 os.environ.setdefault("TESTING", "1")
-
-from app.main import app
-from app.database import Base, get_db
-from app.models import Role
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/platformiq_test_db"
+    (
+        "postgresql://postgres:postgres"
+        "@postgres:5432/platformiq_test_db"
+    ),
 )
 
-engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
+os.environ.setdefault("DATABASE_URL", TEST_DATABASE_URL)
+
+from app.database import (
+    Base,
+    get_db as database_get_db,
+)
+
+# Some authentication routes use a separate dependency module.
+# Override it as well so registration and login use the test database.
+try:
+    from app.auth.dependencies import (
+        get_db as auth_get_db,
+    )
+except ImportError:
+    # If authentication imports app.database.get_db directly,
+    # both dependency objects are the same.
+    auth_get_db = database_get_db
+
+from app.main import app
+from app.models import Role
+
+
+test_engine = create_engine(
+    TEST_DATABASE_URL,
+    pool_pre_ping=True,
+)
 
 TestingSessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
-    bind=engine,
+    bind=test_engine,
 )
 
 
 def override_get_db():
+    """
+    Return a new test database session for each API request.
+    """
     db = TestingSessionLocal()
+
     try:
         yield db
     finally:
+        db.rollback()
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
-
-
 def seed_roles(db):
-    for role_name in ["admin", "developer", "viewer"]:
-        existing = db.query(Role).filter(Role.name == role_name).first()
-        if not existing:
-            db.add(Role(id=str(uuid4()), name=role_name))
+    """
+    Insert the roles required by authentication tests.
+    """
+    required_roles = [
+        "admin",
+        "developer",
+        "viewer",
+    ]
+
+    for role_name in required_roles:
+        existing_role = (
+            db.query(Role)
+            .filter(Role.name == role_name)
+            .first()
+        )
+
+        if existing_role is None:
+            db.add(
+                Role(
+                    id=str(uuid4()),
+                    name=role_name,
+                )
+            )
+
     db.commit()
 
 
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_database():
-    with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
+@pytest.fixture(scope="session")
+def database_schema():
+    """
+    Create database tables only when a database-related fixture
+    is requested.
 
-    Base.metadata.create_all(bind=engine)
+    Pure SLO and error-budget unit tests do not use PostgreSQL.
+    """
+    Base.metadata.create_all(bind=test_engine)
 
     yield
 
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=test_engine)
 
 
-@pytest.fixture(autouse=True)
-def clean_database():
+@pytest.fixture
+def clean_database(database_schema):
+    """
+    Delete existing test data and seed required reference data
+    before each database-backed test.
+
+    This fixture is intentionally not autouse so pure unit tests
+    do not connect to PostgreSQL.
+    """
     db = TestingSessionLocal()
 
-    for table in reversed(Base.metadata.sorted_tables):
-        db.execute(table.delete())
+    try:
+        for table in reversed(Base.metadata.sorted_tables):
+            db.execute(table.delete())
 
-    db.commit()
-    seed_roles(db)
-    db.close()
+        db.commit()
+
+        seed_roles(db)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
     yield
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def db_session(clean_database):
+    """
+    Provide a database session to tests that explicitly request
+    db_session.
+    """
+    db = TestingSessionLocal()
+
+    try:
+        yield db
+    finally:
+        db.rollback()
+        db.close()
 
 
 @pytest.fixture
-def db():
+def db(clean_database):
+    """
+    Backward-compatible database fixture used by existing tests.
+    """
     session = TestingSessionLocal()
+
     try:
         yield session
     finally:
+        session.rollback()
         session.close()
 
 
-def register_user(client, email, password, role):
+@pytest.fixture
+def client(clean_database):
+    """
+    Provide a TestClient configured to use the test database.
+
+    Both the standard application database dependency and the
+    authentication database dependency are overridden.
+    """
+    dependencies_to_override = {
+        database_get_db,
+        auth_get_db,
+    }
+
+    for dependency in dependencies_to_override:
+        app.dependency_overrides[dependency] = (
+            override_get_db
+        )
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        for dependency in dependencies_to_override:
+            app.dependency_overrides.pop(
+                dependency,
+                None,
+            )
+
+
+def register_user(
+    client,
+    email,
+    password,
+    role,
+):
     return client.post(
         "/auth/register",
         json={
@@ -97,7 +208,11 @@ def register_user(client, email, password, role):
     )
 
 
-def login_user(client, email, password):
+def login_user(
+    client,
+    email,
+    password,
+):
     response = client.post(
         "/auth/login",
         json={
@@ -105,9 +220,13 @@ def login_user(client, email, password):
             "password": password,
         },
     )
+
     assert response.status_code == 200, response.text
+
     return response.json()["access_token"]
 
 
 def auth_headers(token):
-    return {"Authorization": f"Bearer {token}"}
+    return {
+        "Authorization": f"Bearer {token}",
+    }

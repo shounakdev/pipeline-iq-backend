@@ -6,7 +6,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
-    Enum,
+    Enum as SQLEnum,
     Float,
     ForeignKey,
     Index,
@@ -217,7 +217,7 @@ class ServiceHealthSnapshot(Base):
 
     environment = Column(String, nullable=False, default="staging")
     status = Column(
-        Enum(ServiceHealthStatus),
+        SQLEnum(ServiceHealthStatus),
         nullable=False,
         default=ServiceHealthStatus.UNKNOWN,
     )
@@ -590,13 +590,13 @@ class Incident(Base):
     description = Column(Text, nullable=True)
 
     severity = Column(
-        Enum(IncidentSeverity, name="incidentseverity"),
+        SQLEnum(IncidentSeverity, name="incidentseverity"),
         nullable=False,
         index=True,
     )
 
     status = Column(
-        Enum(IncidentStatus, name="incidentstatus"),
+        SQLEnum(IncidentStatus, name="incidentstatus"),
         nullable=False,
         default=IncidentStatus.OPEN,
         index=True,
@@ -648,3 +648,342 @@ class IncidentEvent(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     incident = relationship("Incident", back_populates="events")
+
+# ============================================================
+# Sprint 6 — Reliability Models
+# ============================================================
+
+
+class SLOMetricType(str, enum.Enum):
+    AVAILABILITY = "AVAILABILITY"
+    P95_LATENCY = "P95_LATENCY"
+    ERROR_RATE = "ERROR_RATE"
+
+
+class ReliabilitySeverity(str, enum.Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class ErrorBudgetState(str, enum.Enum):
+    HEALTHY = "HEALTHY"
+    WARNING = "WARNING"
+    BREACHED = "BREACHED"
+    EXHAUSTED = "EXHAUSTED"
+
+
+class ReliabilityAlertType(str, enum.Enum):
+    SLO_BREACH = "SLO_BREACH"
+    ERROR_BUDGET_BURN = "ERROR_BUDGET_BURN"
+    ERROR_BUDGET_EXHAUSTED = "ERROR_BUDGET_EXHAUSTED"
+    LATENCY_BREACH = "LATENCY_BREACH"
+    AVAILABILITY_BREACH = "AVAILABILITY_BREACH"
+    ERROR_RATE_BREACH = "ERROR_RATE_BREACH"
+
+
+class ReliabilityAlertStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    RESOLVED = "RESOLVED"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+
+
+class SLODefinition(Base):
+    __tablename__ = "slo_definitions"
+
+    id = Column(
+        String(36),
+        primary_key=True,
+        default=generate_uuid,
+    )
+
+    service_id = Column(
+        String(36),
+        ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    metric_type = Column(
+        SQLEnum(SLOMetricType, name="slo_metric_type"),
+        nullable=False,
+    )
+
+    target_value = Column(Float, nullable=False)
+
+    window_minutes = Column(
+        Integer,
+        nullable=False,
+        default=60,
+        server_default="60",
+    )
+
+    severity_on_breach = Column(
+        SQLEnum(
+            ReliabilitySeverity,
+            name="reliability_severity",
+        ),
+        nullable=False,
+        default=ReliabilitySeverity.HIGH,
+        server_default=ReliabilitySeverity.HIGH.value,
+    )
+
+    enabled = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    service = relationship("Service")
+
+    measurements = relationship(
+        "SLOMeasurement",
+        back_populates="slo_definition",
+        cascade="all, delete-orphan",
+    )
+
+    error_budget_statuses = relationship(
+        "ErrorBudgetStatus",
+        back_populates="slo_definition",
+        cascade="all, delete-orphan",
+    )
+
+    alerts = relationship(
+        "ReliabilityAlert",
+        back_populates="slo_definition",
+        cascade="all, delete-orphan",
+    )
+
+
+class SLOMeasurement(Base):
+    __tablename__ = "slo_measurements"
+
+    id = Column(
+        String(36),
+        primary_key=True,
+        default=generate_uuid,
+    )
+
+    slo_definition_id = Column(
+        String(36),
+        ForeignKey("slo_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    service_id = Column(
+        String(36),
+        ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    metric_type = Column(
+        SQLEnum(SLOMetricType, name="slo_metric_type"),
+        nullable=False,
+    )
+
+    measured_value = Column(Float, nullable=False)
+    target_value = Column(Float, nullable=False)
+    is_breached = Column(Boolean, nullable=False)
+    window_minutes = Column(Integer, nullable=False)
+
+    source = Column(
+        String(50),
+        nullable=False,
+        default="PROMETHEUS",
+        server_default="PROMETHEUS",
+    )
+
+    evaluated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    slo_definition = relationship(
+        "SLODefinition",
+        back_populates="measurements",
+    )
+
+    service = relationship("Service")
+
+
+class ErrorBudgetStatus(Base):
+    __tablename__ = "error_budget_statuses"
+
+    id = Column(
+        String(36),
+        primary_key=True,
+        default=generate_uuid,
+    )
+
+    slo_definition_id = Column(
+        String(36),
+        ForeignKey("slo_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    service_id = Column(
+        String(36),
+        ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    target_percentage = Column(Float, nullable=False)
+    allowed_failure_percentage = Column(Float, nullable=False)
+
+    consumed_percentage = Column(
+        Float,
+        nullable=False,
+        default=0.0,
+        server_default="0",
+    )
+
+    remaining_percentage = Column(
+        Float,
+        nullable=False,
+        default=100.0,
+        server_default="100",
+    )
+
+    burn_rate = Column(
+        Float,
+        nullable=False,
+        default=0.0,
+        server_default="0",
+    )
+
+    status = Column(
+        SQLEnum(ErrorBudgetState, name="error_budget_state"),
+        nullable=False,
+        default=ErrorBudgetState.HEALTHY,
+        server_default=ErrorBudgetState.HEALTHY.value,
+    )
+
+    window_minutes = Column(Integer, nullable=False)
+
+    evaluated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    slo_definition = relationship(
+        "SLODefinition",
+        back_populates="error_budget_statuses",
+    )
+
+    service = relationship("Service")
+
+
+class ReliabilityAlert(Base):
+    __tablename__ = "reliability_alerts"
+
+    id = Column(
+        String(36),
+        primary_key=True,
+        default=generate_uuid,
+    )
+
+    service_id = Column(
+        String(36),
+        ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    slo_definition_id = Column(
+        String(36),
+        ForeignKey("slo_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    alert_type = Column(
+        SQLEnum(
+            ReliabilityAlertType,
+            name="reliability_alert_type",
+        ),
+        nullable=False,
+    )
+
+    severity = Column(
+        SQLEnum(
+            ReliabilitySeverity,
+            name="reliability_severity",
+        ),
+        nullable=False,
+    )
+
+    triggered_value = Column(Float, nullable=False)
+    threshold_value = Column(Float, nullable=False)
+
+    deployment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("deployments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    status = Column(
+        SQLEnum(
+            ReliabilityAlertStatus,
+            name="reliability_alert_status",
+        ),
+        nullable=False,
+        default=ReliabilityAlertStatus.OPEN,
+        server_default=ReliabilityAlertStatus.OPEN.value,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    resolved_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    service = relationship("Service")
+
+    slo_definition = relationship(
+        "SLODefinition",
+        back_populates="alerts",
+    )
+
+    deployment = relationship("Deployment")

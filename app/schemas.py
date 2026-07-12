@@ -43,7 +43,7 @@ class ServiceResponse(BaseModel):
     project_id: str
     name: str
     description: Optional[str] = None
-    service_type: str
+    service_type: str | None = None
     owner: Optional[str] = None
     created_at: datetime
 

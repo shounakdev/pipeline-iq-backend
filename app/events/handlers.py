@@ -2,7 +2,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.events.constants import EVENT_TOPIC_MAP
+from app.events.constants import (
+    EVENT_TOPIC_MAP,
+    TOPIC_TELEMETRY_ALERTS,
+)
+from app.incidents.incident_service import (
+    create_or_update_incident_from_alert,
+)
 from app.models import EventRecord, Incident
 
 
@@ -29,8 +35,10 @@ def handle_event(db: Session, record: EventRecord) -> None:
     elif record.topic == "audit.events":
         handle_audit_event(db, record)
 
-    elif record.topic == "telemetry.alerts":
-        handle_telemetry_alert_event(db, record)
+    elif record.topic == TOPIC_TELEMETRY_ALERTS:
+        handle_telemetry_alert(db, record)
+
+ 
 
     record.processing_status = "PROCESSED"
     record.processing_error = None
@@ -70,6 +78,39 @@ def handle_deployment_event(db: Session, record: EventRecord) -> None:
         raise
     except Exception:
         return
+
+
+
+def handle_telemetry_alert(
+    db: Session,
+    record: EventRecord,
+) -> None:
+    """
+    Convert telemetry and reliability alerts into incidents.
+    """
+
+    if isinstance(record.raw_event, dict):
+        alert_event = record.raw_event
+    else:
+        alert_event = {
+            "event_id": record.event_id,
+            "event_type": record.event_type,
+            "schema_version": record.schema_version,
+            "correlation_id": record.correlation_id,
+            "service_id": record.service_id,
+            "environment": record.environment,
+            "timestamp": (
+                record.timestamp.isoformat()
+                if record.timestamp
+                else None
+            ),
+            "payload": record.payload or {},
+        }
+
+    create_or_update_incident_from_alert(
+        db,
+        alert_event,
+    )
 
 
 def handle_kubernetes_event(db: Session, record: EventRecord) -> None:
