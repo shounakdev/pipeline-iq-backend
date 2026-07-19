@@ -1,0 +1,4 @@
+"""Database access functions for incidents and related records.
+
+This module should contain database queries and persistence operations.
+It should not contain HTTP or status-transition business logic."""

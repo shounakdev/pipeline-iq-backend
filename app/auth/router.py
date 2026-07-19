@@ -8,7 +8,12 @@ from app.models import Role, User
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-ALLOWED_ROLES = ["admin", "developer", "viewer"]
+ALLOWED_ROLES = [
+    "admin",
+    "developer",
+    "operator",
+    "viewer",
+]
 
 
 def build_auth_response(user: User) -> dict:

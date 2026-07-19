@@ -1,0 +1,9 @@
+GET                  /api/incidents
+GET                  /api/incidents/metrics/summary
+GET                  /api/incidents/{incident_id}
+POST                 /api/incidents/{incident_id}/acknowledge
+POST                 /api/incidents/{incident_id}/assign
+POST                 /api/incidents/{incident_id}/status
+POST                 /api/incidents/{incident_id}/comments
+GET                  /api/incidents/{incident_id}/timeline
+GET                  /api/incidents/{incident_id}/metrics

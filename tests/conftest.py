@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 # These values must be configured before importing anything from app.
@@ -51,6 +51,81 @@ TestingSessionLocal = sessionmaker(
 )
 
 
+def create_incident_number_database_objects() -> None:
+    """
+    Create the PostgreSQL sequence and function required by
+    Incident.incident_number.
+
+    Production creates these objects through Alembic. Tests use
+    Base.metadata.create_all(), so they must be created explicitly
+    before SQLAlchemy creates the incidents table.
+    """
+    with test_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE SEQUENCE IF NOT EXISTS incident_number_seq
+                START WITH 1
+                INCREMENT BY 1
+                """
+            )
+        )
+
+        connection.execute(
+            text(
+                """
+                ALTER SEQUENCE incident_number_seq
+                RESTART WITH 1
+                """
+            )
+        )
+
+        connection.execute(
+            text(
+                """
+                CREATE OR REPLACE FUNCTION next_incident_number()
+                RETURNS VARCHAR
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    RETURN
+                        'INC-'
+                        || LPAD(
+                            nextval(
+                                'incident_number_seq'
+                            )::TEXT,
+                            3,
+                            '0'
+                        );
+                END;
+                $$
+                """
+            )
+        )
+
+
+def drop_incident_number_database_objects() -> None:
+    """
+    Remove the PostgreSQL objects created for the test session.
+    """
+    with test_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                DROP FUNCTION IF EXISTS next_incident_number()
+                """
+            )
+        )
+
+        connection.execute(
+            text(
+                """
+                DROP SEQUENCE IF EXISTS incident_number_seq
+                """
+            )
+        )
+
+
 def override_get_db():
     """
     Return a new test database session for each API request.
@@ -71,6 +146,7 @@ def seed_roles(db):
     required_roles = [
         "admin",
         "developer",
+        "operator",
         "viewer",
     ]
 
@@ -100,11 +176,14 @@ def database_schema():
 
     Pure SLO and error-budget unit tests do not use PostgreSQL.
     """
-    Base.metadata.create_all(bind=test_engine)
+    create_incident_number_database_objects()
 
-    yield
-
-    Base.metadata.drop_all(bind=test_engine)
+    try:
+        Base.metadata.create_all(bind=test_engine)
+        yield
+    finally:
+        Base.metadata.drop_all(bind=test_engine)
+        drop_incident_number_database_objects()
 
 
 @pytest.fixture
@@ -121,6 +200,16 @@ def clean_database(database_schema):
     try:
         for table in reversed(Base.metadata.sorted_tables):
             db.execute(table.delete())
+
+        # Keep generated incident numbers deterministic across tests.
+        db.execute(
+            text(
+                """
+                ALTER SEQUENCE incident_number_seq
+                RESTART WITH 1
+                """
+            )
+        )
 
         db.commit()
 

@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.observability.alert_rules import evaluate_alerts
-from app.incidents.incident_service import create_or_update_incident_from_alert
+
 
 
 TELEMETRY_ALERTS_TOPIC = "telemetry.alerts"
@@ -13,9 +13,10 @@ def build_alert_event(snapshot, alert, correlation_id: str | None = None):
     """
     Build a telemetry alert event from a service health snapshot.
 
-    This event is used for:
-    1. Publishing to Kafka topic: telemetry.alerts
-    2. Creating/updating incidents
+    This event is published to telemetry.alerts.
+
+    The event consumer is responsible for creating or updating
+    the corresponding incident.
     """
 
     alert_correlation_id = (
@@ -49,8 +50,9 @@ def emit_alerts_for_snapshot(
     correlation_id: str | None = None,
 ):
     """
-    Evaluate alert rules for a snapshot, publish alert events to Kafka,
-    and create/update incidents from those alerts.
+    Evaluate alert rules for a snapshot and publish alert events to Kafka.
+
+    Incident creation is handled asynchronously by the event consumer.
     """
 
     alerts = evaluate_alerts(snapshot)
@@ -72,9 +74,6 @@ def emit_alerts_for_snapshot(
             value=json.dumps(event).encode("utf-8"),
         )
 
-        # New Sprint 5E behavior:
-        # Convert alert into incident
-        create_or_update_incident_from_alert(db, event)
 
         emitted_events.append(event)
 

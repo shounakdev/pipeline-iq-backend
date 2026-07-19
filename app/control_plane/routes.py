@@ -1,3 +1,4 @@
+from app.auth.dependencies import require_roles
 from datetime import datetime
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ from app.models import (
     Project,
     Repository,
     Service,
+    User,
 )
 from app.schemas import (
     AuditEventResponse,
@@ -379,8 +381,16 @@ def trigger_service_pipeline(
     )
 
 
-@router.get("/audit-events", response_model=list[AuditEventResponse])
-def list_audit_events(db: Session = Depends(get_db)):
+@router.get(
+    "/audit-events",
+    response_model=list[AuditEventResponse],
+)
+def list_audit_events(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles("admin")
+    ),
+):
     return (
         db.query(AuditEvent)
         .order_by(AuditEvent.created_at.desc())

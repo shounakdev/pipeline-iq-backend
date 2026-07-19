@@ -1,452 +1,429 @@
-import json
-import uuid
-from datetime import datetime, timezone
-from typing import Any
+"""HTTP routes for Sprint 7 incident operations.
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+The router handles authentication, authorization, HTTP error mapping, and
+request/response translation. Incident business logic remains in
+app.incidents.service.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+)
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import require_roles
 from app.database import get_db
+from app.incidents import service as incident_service
+from app.incidents.enums import (
+    IncidentSeverity,
+    IncidentStatus,
+)
+from app.incidents.schemas import (
+    IncidentAcknowledgeRequest,
+    IncidentAssignRequest,
+    IncidentCommentCreateRequest,
+    IncidentCommentResponse,
+    IncidentDetailResponse,
+    IncidentListResponse,
+    IncidentMetricsResponse,
+    IncidentMetricsSummaryResponse,
+    IncidentStatusUpdateRequest,
+    IncidentTimelineResponse,
+)
+from app.incidents.transitions import (
+    InvalidIncidentTransitionError,
+)
+from app.models import User
+
+
+INCIDENT_READ_ROLES = (
+    "admin",
+    "developer",
+    "operator",
+    "viewer",
+)
+
+INCIDENT_MANAGE_ROLES = (
+    "admin",
+    "developer",
+    "operator",
+)
+
+
+def _raise_incident_error(
+    error: Exception,
+) -> None:
+    """Translate incident domain exceptions into HTTP errors.
+
+    This helper is retained for compatibility with existing lifecycle tests
+    and any router code that needs explicit incident error translation.
+    Unknown exceptions are re-raised unchanged.
+    """
+
+    if isinstance(
+        error,
+        incident_service.IncidentNotFoundError,
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+
+    if isinstance(
+        error,
+        (
+            incident_service.IncidentConflictError,
+            InvalidIncidentTransitionError,
+        ),
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    raise error
 
 
 router = APIRouter(
     prefix="/api/incidents",
-    tags=["incidents"],
+    tags=["Incidents"],
 )
 
+# Retained because main.py imports this router for service-level incident and
+# runtime-timeline endpoints.
 service_runtime_router = APIRouter(
     prefix="/api/services",
     tags=["runtime-timeline"],
 )
 
 
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def row_to_dict(row) -> dict[str, Any]:
-    return dict(row._mapping)
-
-
-def add_incident_event(
-    db: Session,
-    incident_id: str,
-    event_type: str,
-    message: str,
-    metadata: dict[str, Any] | None = None,
+@router.get(
+    "",
+    response_model=IncidentListResponse,
+)
+def list_incidents_endpoint(
+    status: IncidentStatus | None = Query(
+        default=None,
+    ),
+    severity: IncidentSeverity | None = Query(
+        default=None,
+    ),
+    service_id: str | None = Query(
+        default=None,
+    ),
+    environment: str | None = Query(
+        default=None,
+    ),
+    assignee_id: str | None = Query(
+        default=None,
+    ),
+    from_date: datetime | None = Query(
+        default=None,
+    ),
+    to_date: datetime | None = Query(
+        default=None,
+    ),
+    page: int = Query(
+        default=1,
+        ge=1,
+    ),
+    page_size: int = Query(
+        default=25,
+        ge=1,
+        le=100,
+    ),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles(*INCIDENT_READ_ROLES)
+    ),
 ):
-    db.execute(
-        text(
-            """
-            insert into incident_events (
-                id,
-                incident_id,
-                event_type,
-                message,
-                metadata,
-                created_at
-            )
-            values (
-                :id,
-                :incident_id,
-                :event_type,
-                :message,
-                cast(:metadata as jsonb),
-                :created_at
-            )
-            """
-        ),
-        {
-            "id": str(uuid.uuid4()),
-            "incident_id": incident_id,
-            "event_type": event_type,
-            "message": message,
-            "metadata": "{}" if metadata is None else json.dumps(metadata),
-            "created_at": utc_now(),
-        },
-    )
+    """Return a filtered and paginated incident list."""
 
-
-@router.get("")
-def list_incidents(db: Session = Depends(get_db)):
-    result = db.execute(
-        text(
-            """
-            select
-                id,
-                title,
-                description,
-                severity,
-                status,
-                service_id,
-                environment,
-                correlation_id,
-                triggered_by_event_id,
-                started_at,
-                resolved_at,
-                created_at,
-                updated_at
-            from incidents
-            order by created_at desc
-            """
-        )
-    ).fetchall()
-
-    return [row_to_dict(row) for row in result]
-
-
-@router.get("/{incident_id}")
-def get_incident(incident_id: str, db: Session = Depends(get_db)):
-    result = db.execute(
-        text(
-            """
-            select
-                id,
-                title,
-                description,
-                severity,
-                status,
-                service_id,
-                environment,
-                correlation_id,
-                triggered_by_event_id,
-                started_at,
-                resolved_at,
-                created_at,
-                updated_at
-            from incidents
-            where id = :incident_id
-            """
-        ),
-        {"incident_id": incident_id},
-    ).fetchone()
-
-    if result is None:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    return row_to_dict(result)
-
-
-@router.get("/{incident_id}/timeline")
-def get_incident_timeline(incident_id: str, db: Session = Depends(get_db)):
-    incident = db.execute(
-        text(
-            """
-            select id, service_id, environment, correlation_id, created_at
-            from incidents
-            where id = :incident_id
-            """
-        ),
-        {"incident_id": incident_id},
-    ).fetchone()
-
-    if incident is None:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    incident_data = row_to_dict(incident)
-
-    events = db.execute(
-        text(
-            """
-            select
-                id,
-                incident_id,
-                event_type,
-                message,
-                metadata,
-                created_at
-            from incident_events
-            where incident_id = :incident_id
-            order by created_at desc
-            """
-        ),
-        {"incident_id": incident_id},
-    ).fetchall()
-
-    timeline = []
-
-    for event in events:
-        item = row_to_dict(event)
-        timeline.append(
-            {
-                "source": "incident_events",
-                "type": item["event_type"],
-                "message": item["message"],
-                "metadata": item.get("metadata"),
-                "timestamp": item["created_at"],
-            }
-        )
-
-    snapshots = db.execute(
-        text(
-            """
-            select
-                id,
-                service_id,
-                service_name,
-                environment,
-                status,
-                latency_ms,
-                error_rate,
-                pod_restart_count,
-                replica_count,
-                available_replicas,
-                created_at
-            from service_health_snapshots
-            where service_id = :service_id
-              and environment = :environment
-            order by created_at desc
-            limit 20
-            """
-        ),
-        {
-            "service_id": incident_data["service_id"],
-            "environment": incident_data["environment"],
-        },
-    ).fetchall()
-
-    for snapshot in snapshots:
-        item = row_to_dict(snapshot)
-        timeline.append(
-            {
-                "source": "service_health_snapshots",
-                "type": "HEALTH_SNAPSHOT",
-                "message": f"Service health snapshot recorded with status {item['status']}",
-                "metadata": item,
-                "timestamp": item["created_at"],
-            }
-        )
-
-    timeline.sort(
-        key=lambda x: str(x.get("timestamp") or ""),
-        reverse=True,
-    )
-
-    return {
-        "incident_id": incident_id,
-        "timeline": timeline,
-    }
-
-
-@router.post("/{incident_id}/acknowledge")
-def acknowledge_incident(incident_id: str, db: Session = Depends(get_db)):
-    incident = db.execute(
-        text(
-            """
-            select id, status
-            from incidents
-            where id = :incident_id
-            """
-        ),
-        {"incident_id": incident_id},
-    ).fetchone()
-
-    if incident is None:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    incident_data = row_to_dict(incident)
-
-    if incident_data["status"] == "RESOLVED":
+    if (
+        from_date is not None
+        and to_date is not None
+        and from_date > to_date
+    ):
         raise HTTPException(
-            status_code=400,
-            detail="Cannot acknowledge a resolved incident",
+            status_code=422,
+            detail=(
+                "from_date cannot be later than "
+                "to_date"
+            ),
         )
 
-    now = utc_now()
-
-    db.execute(
-        text(
-            """
-            update incidents
-            set status = 'ACKNOWLEDGED',
-                updated_at = :updated_at
-            where id = :incident_id
-            """
-        ),
-        {
-            "incident_id": incident_id,
-            "updated_at": now,
-        },
+    return incident_service.list_incidents(
+        db,
+        status=status,
+        severity=severity,
+        service_id=service_id,
+        environment=environment,
+        assignee_id=assignee_id,
+        from_date=from_date,
+        to_date=to_date,
+        page=page,
+        page_size=page_size,
     )
 
-    add_incident_event(
-        db=db,
+
+# This static route must remain before /{incident_id}; otherwise FastAPI may
+# attempt to interpret "metrics" as an incident UUID.
+@router.get(
+    "/metrics/summary",
+    response_model=IncidentMetricsSummaryResponse,
+)
+def get_incident_metrics_summary_endpoint(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles(*INCIDENT_READ_ROLES)
+    ),
+):
+    """Return aggregate metrics across incidents."""
+
+    return incident_service.get_incident_metrics_summary(
+        db,
+    )
+
+
+@router.get(
+    "/{incident_id}",
+    response_model=IncidentDetailResponse,
+)
+def get_incident_detail_endpoint(
+    incident_id: UUID,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles(*INCIDENT_READ_ROLES)
+    ),
+):
+    """Return the complete details for one incident."""
+
+    return incident_service.get_incident_detail(
+        db,
         incident_id=incident_id,
-        event_type="INCIDENT_ACKNOWLEDGED",
-        message="Incident acknowledged",
-        metadata={},
     )
 
-    db.commit()
 
-    return {
-        "incident_id": incident_id,
-        "status": "ACKNOWLEDGED",
-        "message": "Incident acknowledged",
-    }
+@router.post(
+    "/{incident_id}/acknowledge",
+    response_model=IncidentDetailResponse,
+)
+def acknowledge_incident_endpoint(
+    incident_id: UUID,
+    request: IncidentAcknowledgeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(*INCIDENT_MANAGE_ROLES)
+    ),
+):
+    """Acknowledge an incident."""
 
-
-@router.post("/{incident_id}/resolve")
-def resolve_incident(incident_id: str, db: Session = Depends(get_db)):
-    incident = db.execute(
-        text(
-            """
-            select id, status
-            from incidents
-            where id = :incident_id
-            """
-        ),
-        {"incident_id": incident_id},
-    ).fetchone()
-
-    if incident is None:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    now = utc_now()
-
-    db.execute(
-        text(
-            """
-            update incidents
-            set status = 'RESOLVED',
-                resolved_at = :resolved_at,
-                updated_at = :updated_at
-            where id = :incident_id
-            """
-        ),
-        {
-            "incident_id": incident_id,
-            "resolved_at": now,
-            "updated_at": now,
-        },
-    )
-
-    add_incident_event(
-        db=db,
+    return incident_service.acknowledge_incident(
+        db,
         incident_id=incident_id,
-        event_type="INCIDENT_RESOLVED",
-        message="Incident resolved",
-        metadata={},
+        request=request,
+        actor_user_id=str(current_user.id),
     )
 
-    db.commit()
 
-    return {
-        "incident_id": incident_id,
-        "status": "RESOLVED",
-        "message": "Incident resolved",
-    }
+@router.post(
+    "/{incident_id}/assign",
+    response_model=IncidentDetailResponse,
+)
+def assign_incident_endpoint(
+    incident_id: UUID,
+    request: IncidentAssignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(*INCIDENT_MANAGE_ROLES)
+    ),
+):
+    """Create or replace the current incident assignment."""
 
-
-@service_runtime_router.get("/{service_id}/incidents")
-def get_service_incidents(service_id: str, db: Session = Depends(get_db)):
-    result = db.execute(
-        text(
-            """
-            select
-                id,
-                title,
-                description,
-                severity,
-                status,
-                service_id,
-                environment,
-                correlation_id,
-                triggered_by_event_id,
-                started_at,
-                resolved_at,
-                created_at,
-                updated_at
-            from incidents
-            where service_id = :service_id
-            order by created_at desc
-            """
-        ),
-        {"service_id": service_id},
-    ).fetchall()
-
-    return [row_to_dict(row) for row in result]
-
-
-@service_runtime_router.get("/{service_id}/runtime-timeline")
-def get_service_runtime_timeline(service_id: str, db: Session = Depends(get_db)):
-    timeline = []
-
-    incident_events = db.execute(
-        text(
-            """
-            select
-                ie.id,
-                ie.incident_id,
-                ie.event_type,
-                ie.message,
-                ie.metadata,
-                ie.created_at
-            from incident_events ie
-            join incidents i on i.id = ie.incident_id
-            where i.service_id = :service_id
-            order by ie.created_at desc
-            limit 50
-            """
-        ),
-        {"service_id": service_id},
-    ).fetchall()
-
-    for event in incident_events:
-        item = row_to_dict(event)
-        timeline.append(
-            {
-                "source": "incident_events",
-                "type": item["event_type"],
-                "message": item["message"],
-                "metadata": item.get("metadata"),
-                "timestamp": item["created_at"],
-            }
-        )
-
-    health_snapshots = db.execute(
-        text(
-            """
-            select
-                id,
-                service_id,
-                service_name,
-                environment,
-                status,
-                latency_ms,
-                error_rate,
-                pod_restart_count,
-                replica_count,
-                available_replicas,
-                created_at
-            from service_health_snapshots
-            where service_id = :service_id
-            order by created_at desc
-            limit 50
-            """
-        ),
-        {"service_id": service_id},
-    ).fetchall()
-
-    for snapshot in health_snapshots:
-        item = row_to_dict(snapshot)
-        timeline.append(
-            {
-                "source": "service_health_snapshots",
-                "type": "HEALTH_SNAPSHOT",
-                "message": f"Service health snapshot recorded with status {item['status']}",
-                "metadata": item,
-                "timestamp": item["created_at"],
-            }
-        )
-
-    timeline.sort(
-        key=lambda x: str(x.get("timestamp") or ""),
-        reverse=True,
+    return incident_service.assign_incident(
+        db,
+        incident_id=incident_id,
+        request=request,
+        assigned_by_user_id=str(current_user.id),
     )
 
-    return {
-        "service_id": service_id,
-        "timeline": timeline,
-    }
+
+@router.post(
+    "/{incident_id}/status",
+    response_model=IncidentDetailResponse,
+)
+def update_incident_status_endpoint(
+    incident_id: UUID,
+    request: IncidentStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(*INCIDENT_MANAGE_ROLES)
+    ),
+):
+    """Apply a validated status transition to an incident."""
+
+    return incident_service.update_incident_status(
+        db,
+        incident_id=incident_id,
+        request=request,
+        actor_user_id=str(current_user.id),
+    )
+
+
+@router.post(
+    "/{incident_id}/comments",
+    response_model=IncidentCommentResponse,
+    status_code=201,
+)
+def add_incident_comment_endpoint(
+    incident_id: UUID,
+    request: IncidentCommentCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(*INCIDENT_MANAGE_ROLES)
+    ),
+):
+    """Add a comment to an incident."""
+
+    return incident_service.add_incident_comment(
+        db,
+        incident_id=incident_id,
+        request=request,
+        actor=current_user,
+    )
+
+
+@router.get(
+    "/{incident_id}/timeline",
+    response_model=IncidentTimelineResponse,
+)
+def get_incident_timeline_endpoint(
+    incident_id: UUID,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles(*INCIDENT_READ_ROLES)
+    ),
+):
+    """Return the chronological timeline for an incident."""
+
+    return incident_service.get_incident_timeline(
+        db,
+        incident_id=incident_id,
+    )
+
+
+@router.get(
+    "/{incident_id}/metrics",
+    response_model=IncidentMetricsResponse,
+)
+def get_incident_metrics_endpoint(
+    incident_id: UUID,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles(*INCIDENT_READ_ROLES)
+    ),
+):
+    """Return MTTD, MTTA, MTTR, and metric snapshots for an incident."""
+
+    return incident_service.get_incident_metrics(
+        db,
+        incident_id=incident_id,
+    )
+
+
+@service_runtime_router.get(
+    "/{service_id}/incidents",
+    response_model=IncidentListResponse,
+)
+def get_service_incidents_endpoint(
+    service_id: str,
+    status: IncidentStatus | None = Query(
+        default=None,
+    ),
+    severity: IncidentSeverity | None = Query(
+        default=None,
+    ),
+    environment: str | None = Query(
+        default=None,
+    ),
+    assignee_id: str | None = Query(
+        default=None,
+    ),
+    from_date: datetime | None = Query(
+        default=None,
+    ),
+    to_date: datetime | None = Query(
+        default=None,
+    ),
+    page: int = Query(
+        default=1,
+        ge=1,
+    ),
+    page_size: int = Query(
+        default=25,
+        ge=1,
+        le=100,
+    ),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles(*INCIDENT_READ_ROLES)
+    ),
+):
+    """Return incidents associated with a particular service."""
+
+    if (
+        from_date is not None
+        and to_date is not None
+        and from_date > to_date
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "from_date cannot be later than "
+                "to_date"
+            ),
+        )
+
+    return incident_service.list_incidents(
+        db,
+        status=status,
+        severity=severity,
+        service_id=service_id,
+        environment=environment,
+        assignee_id=assignee_id,
+        from_date=from_date,
+        to_date=to_date,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@service_runtime_router.get(
+    "/{service_id}/runtime-timeline",
+    response_model=dict[str, Any],
+)
+def get_service_runtime_timeline_endpoint(
+    service_id: str,
+    environment: str | None = Query(
+        default=None,
+    ),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(
+        require_roles(*INCIDENT_READ_ROLES)
+    ),
+):
+    """Return the combined runtime timeline for a service."""
+
+    return incident_service.get_service_runtime_timeline(
+        db,
+        service_id=service_id,
+        environment=environment,
+    )

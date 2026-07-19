@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
-
+from app.events.constants import RELIABILITY_ALERT_CREATED
 from app.events.service import record_platform_event
 from app.models import (
     Deployment,
@@ -394,6 +394,10 @@ def create_reliability_alert_and_event(
     )
 
     payload = {
+        "alert_id": str(alert.id),
+        "alert_type": alert_type.value,
+        "created_at": alert_created_at.isoformat(),
+
         # Keep these in the payload because the
         # transactional outbox envelope may not place
         # them at the top level.
@@ -455,7 +459,7 @@ def create_reliability_alert_and_event(
 
     outbox_event = record_platform_event(
         db,
-        event_type=alert_type.value,
+        event_type=RELIABILITY_ALERT_CREATED,
         correlation_id=correlation_id,
         service_id=service_id,
         environment=environment,

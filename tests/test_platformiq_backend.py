@@ -64,7 +64,12 @@ def test_roles_seeded(db):
     roles = db.query(Role).all()
     role_names = sorted([role.name for role in roles])
 
-    assert role_names == ["admin", "developer", "viewer"]
+    assert role_names == [
+    "admin",
+    "developer",
+    "operator",
+    "viewer",
+]
 
 
 def test_admin_can_trigger_pipeline(client):

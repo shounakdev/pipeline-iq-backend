@@ -4,7 +4,12 @@ from app.models import Role
 
 db = SessionLocal()
 
-roles = ["admin", "developer", "viewer"]
+roles = [
+    "admin",
+    "developer",
+    "operator",
+    "viewer",
+]
 
 for role_name in roles:
     existing = db.query(Role).filter(Role.name == role_name).first()
