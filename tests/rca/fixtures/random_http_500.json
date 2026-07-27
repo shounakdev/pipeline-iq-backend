@@ -1,0 +1,59 @@
+{
+  "scenario": "random_http_500",
+  "evidence": {
+    "incident_id": "INC-HTTP-500",
+    "affected_service": "payment-service",
+    "sources": {
+      "deployment": {
+        "status": "COLLECTED",
+        "version": "v1.8.3",
+        "deployed_minutes_before_alert": 4
+      },
+      "metrics": {
+        "status": "COLLECTED",
+        "http_500_rate_before": 0.01,
+        "http_500_rate_after": 0.28,
+        "error_rate_before": 0.01,
+        "error_rate_after": 0.31
+      },
+      "logs": {
+        "status": "COLLECTED",
+        "uncaught_exception_errors": 37,
+        "top_error_signatures": [
+          {
+            "signature": "Unhandled payment validation exception",
+            "count": 37
+          }
+        ]
+      },
+      "kubernetes": {
+        "status": "COLLECTED",
+        "restart_delta": 0,
+        "available_replicas_before": 3,
+        "available_replicas_after": 3
+      }
+    }
+  },
+  "expected_report": {
+    "primary_category": "APPLICATION_REGRESSION",
+    "confidence": "HIGH",
+    "supporting_evidence": [
+      {
+        "claim": "HTTP 500 rate increased during the incident window.",
+        "evidence_path": "$.sources.metrics.http_500_rate_after"
+      },
+      {
+        "claim": "Application exception logs increased.",
+        "evidence_path": "$.sources.logs.uncaught_exception_errors"
+      }
+    ],
+    "alternative_hypotheses": [
+      {
+        "category": "KUBERNETES_RUNTIME",
+        "reason": "Kubernetes health remained stable.",
+        "contradicting_evidence_path": "$.sources.kubernetes.restart_delta"
+      }
+    ],
+    "missing_evidence": []
+  }
+}

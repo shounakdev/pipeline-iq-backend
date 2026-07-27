@@ -14,6 +14,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.rca_router import router as rca_router
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -44,6 +45,8 @@ from app.tasks import execute_pipeline_task
 logger = logging.getLogger(__name__)
 
 
+
+
 app = FastAPI(
     title="PlatformIQ(Formerly Intelligent CI/CD Platform)",
     description=(
@@ -52,6 +55,8 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
+
+app.include_router(rca_router)
 
 
 @app.exception_handler(IncidentNotFoundError)

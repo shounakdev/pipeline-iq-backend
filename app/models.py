@@ -629,6 +629,24 @@ class Incident(Base):
         Text,
         nullable=True,
     )
+    
+    evidence_records = relationship(
+        "IncidentEvidence",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+    )
+
+    rca_reports = relationship(
+        "RCAReport",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+    )
+
+    rca_feedback = relationship(
+        "RCAFeedback",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+    )
 
     severity = Column(
         incident_severity_enum,
@@ -1299,7 +1317,260 @@ class IncidentAlertLink(Base):
 # Sprint 6 — Reliability Models
 # ============================================================
 
+class EvidenceCollectionStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    COLLECTING = "COLLECTING"
+    COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
 
+
+class RCAReportStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    GENERATING = "GENERATING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class RCAConfidence(str, enum.Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class RCAFeedbackRating(str, enum.Enum):
+    CORRECT = "CORRECT"
+    PARTIALLY_CORRECT = "PARTIALLY_CORRECT"
+    INCORRECT = "INCORRECT"
+
+
+class IncidentEvidence(Base):
+    __tablename__ = "incident_evidence"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    incident_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    version = Column(Integer, nullable=False, default=1)
+
+    status = Column(
+        SQLEnum(EvidenceCollectionStatus, name="evidence_collection_status"),
+        nullable=False,
+        default=EvidenceCollectionStatus.PENDING,
+        server_default=EvidenceCollectionStatus.PENDING.value,
+    )
+
+    schema_version = Column(
+        String(20),
+        nullable=False,
+        default="1.0",
+        server_default="1.0",
+    )
+
+    window_start = Column(DateTime(timezone=True), nullable=True)
+    window_end = Column(DateTime(timezone=True), nullable=True)
+    anchor_time = Column(DateTime(timezone=True), nullable=True)
+
+    evidence_payload = Column(JSONB, nullable=False, default=dict)
+    source_statuses = Column(JSONB, nullable=False, default=dict)
+    collection_errors = Column(JSONB, nullable=False, default=list)
+
+    created_by = Column(
+        String,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    incident = relationship("Incident", back_populates="evidence_records")
+
+    reports = relationship(
+        "RCAReport",
+        back_populates="evidence",
+        cascade="all, delete-orphan",
+    )
+
+    creator = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "incident_id",
+            "version",
+            name="uq_incident_evidence_incident_version",
+        ),
+        Index(
+            "ix_incident_evidence_incident_created",
+            "incident_id",
+            "created_at",
+        ),
+    )
+
+
+class RCAReport(Base):
+    __tablename__ = "rca_reports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    incident_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    evidence_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("incident_evidence.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    version = Column(Integer, nullable=False, default=1)
+
+    status = Column(
+        SQLEnum(RCAReportStatus, name="rca_report_status"),
+        nullable=False,
+        default=RCAReportStatus.PENDING,
+        server_default=RCAReportStatus.PENDING.value,
+    )
+
+    schema_version = Column(
+        String(20),
+        nullable=False,
+        default="1.0",
+        server_default="1.0",
+    )
+
+    confidence = Column(
+        SQLEnum(RCAConfidence, name="rca_confidence"),
+        nullable=True,
+    )
+
+    summary = Column(Text, nullable=True)
+    probable_root_cause = Column(Text, nullable=True)
+
+    supporting_evidence = Column(JSONB, nullable=False, default=list)
+    contradictory_evidence = Column(JSONB, nullable=False, default=list)
+    alternative_hypotheses = Column(JSONB, nullable=False, default=list)
+    missing_evidence = Column(JSONB, nullable=False, default=list)
+
+    model_provider = Column(String(100), nullable=True)
+    model_name = Column(String(100), nullable=True)
+    prompt_version = Column(String(50), nullable=True)
+
+    generated_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    incident = relationship("Incident", back_populates="rca_reports")
+    evidence = relationship("IncidentEvidence", back_populates="reports")
+
+    feedback_items = relationship(
+        "RCAFeedback",
+        back_populates="report",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "incident_id",
+            "version",
+            name="uq_rca_reports_incident_version",
+        ),
+        Index(
+            "ix_rca_reports_incident_created",
+            "incident_id",
+            "created_at",
+        ),
+    )
+
+
+class RCAFeedback(Base):
+    __tablename__ = "rca_feedback"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    incident_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    report_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("rca_reports.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    rating = Column(
+        SQLEnum(RCAFeedbackRating, name="rca_feedback_rating"),
+        nullable=False,
+    )
+
+    comment = Column(Text, nullable=True)
+    correct_root_cause = Column(Text, nullable=True)
+
+    reviewer_id = Column(
+        String,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    incident = relationship("Incident", back_populates="rca_feedback")
+    report = relationship("RCAReport", back_populates="feedback_items")
+    reviewer = relationship("User")
+
+    __table_args__ = (
+        Index(
+            "ix_rca_feedback_report_created",
+            "report_id",
+            "created_at",
+        ),
+    )
+    
 class SLOMetricType(str, enum.Enum):
     AVAILABILITY = "AVAILABILITY"
     P95_LATENCY = "P95_LATENCY"

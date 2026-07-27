@@ -1,0 +1,63 @@
+{
+  "scenario": "database_timeout",
+  "evidence": {
+    "incident_id": "INC-DB-TIMEOUT",
+    "affected_service": "payment-service",
+    "sources": {
+      "logs": {
+        "status": "COLLECTED",
+        "database_timeout_errors": 42,
+        "top_error_signatures": [
+          {
+            "signature": "database timeout while processing payment",
+            "count": 42
+          }
+        ]
+      },
+      "traces": {
+        "status": "COLLECTED",
+        "failed_spans": [
+          {
+            "service": "payment-service",
+            "dependency": "postgresql",
+            "error": "timeout"
+          }
+        ]
+      },
+      "metrics": {
+        "status": "COLLECTED",
+        "p95_latency_before_ms": 180,
+        "p95_latency_after_ms": 2400,
+        "http_500_rate_before": 0.01,
+        "http_500_rate_after": 0.22
+      },
+      "kubernetes": {
+        "status": "COLLECTED",
+        "restart_delta": 0,
+        "cpu_status": "NORMAL"
+      }
+    }
+  },
+  "expected_report": {
+    "primary_category": "DATABASE_DEPENDENCY",
+    "confidence": "HIGH",
+    "supporting_evidence": [
+      {
+        "claim": "Payment failures correlate with PostgreSQL timeout evidence.",
+        "evidence_path": "$.sources.traces.failed_spans[0]"
+      },
+      {
+        "claim": "Database timeout logs increased during the incident window.",
+        "evidence_path": "$.sources.logs.database_timeout_errors"
+      }
+    ],
+    "alternative_hypotheses": [
+      {
+        "category": "KUBERNETES_RUNTIME",
+        "reason": "Pod restart and CPU evidence is normal.",
+        "contradicting_evidence_path": "$.sources.kubernetes.restart_delta"
+      }
+    ],
+    "missing_evidence": []
+  }
+}

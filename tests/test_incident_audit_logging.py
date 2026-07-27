@@ -52,14 +52,22 @@ def _create_incident(db: Session) -> Incident:
         detected_at=now,
     )
 
-    db.add_all([project, service, incident])
+    db.add_all(
+        [
+            project,
+            service,
+            incident,
+        ]
+    )
     db.commit()
     db.refresh(incident)
 
     return incident
 
 
-def _developer_headers(client) -> dict[str, str]:
+def _developer_headers(
+    client,
+) -> dict[str, str]:
     email = "audit-developer@example.com"
     password = "developer123"
 
@@ -70,9 +78,10 @@ def _developer_headers(client) -> dict[str, str]:
         "developer",
     )
 
-    assert registration.status_code in {200, 201}, (
-        registration.text
-    )
+    assert registration.status_code in {
+        200,
+        201,
+    }, registration.text
 
     token = login_user(
         client,
@@ -90,7 +99,10 @@ def _acknowledge_incident(
     headers: dict[str, str],
 ):
     return client.post(
-        f"/api/incidents/{incident_id}/acknowledge",
+        (
+            f"/api/incidents/"
+            f"{incident_id}/acknowledge"
+        ),
         headers=headers,
         json={},
     )
@@ -122,13 +134,18 @@ def _acknowledgement_audit_count(
         .where(
             AuditEvent.action
             == "INCIDENT_ACKNOWLEDGED",
-            AuditEvent.entity_id == str(incident_id),
+            AuditEvent.entity_id
+            == str(incident_id),
         )
     ).scalar_one()
 
 
 def _enum_value(value):
-    return getattr(value, "value", value)
+    return getattr(
+        value,
+        "value",
+        value,
+    )
 
 
 def test_status_change_creates_timeline_and_audit(
@@ -144,7 +161,9 @@ def test_status_change_creates_timeline_and_audit(
         headers=headers,
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 200, (
+        response.text
+    )
     assert response.json()["incident"]["status"] == (
         "ACKNOWLEDGED"
     )
@@ -178,18 +197,24 @@ def test_status_change_creates_timeline_and_audit(
         select(AuditEvent).where(
             AuditEvent.action
             == "INCIDENT_ACKNOWLEDGED",
-            AuditEvent.entity_id == str(incident.id),
+            AuditEvent.entity_id
+            == str(incident.id),
         )
     ).scalar_one()
 
-    details = json.loads(audit_event.details)
+    details = json.loads(
+        audit_event.details
+    )
 
     assert audit_event.actor_id is not None
     assert details["from_status"] == "DETECTED"
-    assert details["to_status"] == "ACKNOWLEDGED"
+    assert (
+        details["to_status"]
+        == "ACKNOWLEDGED"
+    )
 
 
-def test_duplicate_acknowledgement_does_not_duplicate_events(
+def test_duplicate_acknowledgement_returns_conflict_without_duplicate_events(
     client,
     db_session: Session,
 ) -> None:
@@ -205,11 +230,17 @@ def test_duplicate_acknowledgement_does_not_duplicate_events(
     assert first_response.status_code == 200, (
         first_response.text
     )
+    assert (
+        first_response.json()["incident"]["status"]
+        == "ACKNOWLEDGED"
+    )
 
     db_session.expire_all()
     db_session.refresh(incident)
 
-    first_acknowledged_at = incident.acknowledged_at
+    first_acknowledged_at = (
+        incident.acknowledged_at
+    )
 
     timeline_count_after_first = (
         _acknowledgement_timeline_count(
@@ -225,6 +256,7 @@ def test_duplicate_acknowledgement_does_not_duplicate_events(
         )
     )
 
+    assert first_acknowledged_at is not None
     assert timeline_count_after_first == 1
     assert audit_count_after_first == 1
 
@@ -234,24 +266,45 @@ def test_duplicate_acknowledgement_does_not_duplicate_events(
         headers=headers,
     )
 
-    assert second_response.status_code == 200, (
+    assert second_response.status_code == 409, (
         second_response.text
     )
-    assert second_response.json()["incident"]["status"] == (
-        "ACKNOWLEDGED"
-    )
+    assert second_response.json() == {
+        "detail": (
+            "Incident is already in status "
+            "ACKNOWLEDGED"
+        )
+    }
 
     db_session.expire_all()
     db_session.refresh(incident)
 
-    assert incident.acknowledged_at == first_acknowledged_at
+    assert IncidentStatus(incident.status) == (
+        IncidentStatus.ACKNOWLEDGED
+    )
+    assert incident.acknowledged_at == (
+        first_acknowledged_at
+    )
 
-    assert _acknowledgement_timeline_count(
-        db_session,
-        incident.id,
-    ) == timeline_count_after_first
+    timeline_count_after_second = (
+        _acknowledgement_timeline_count(
+            db_session,
+            incident.id,
+        )
+    )
 
-    assert _acknowledgement_audit_count(
-        db_session,
-        incident.id,
-    ) == audit_count_after_first
+    audit_count_after_second = (
+        _acknowledgement_audit_count(
+            db_session,
+            incident.id,
+        )
+    )
+
+    assert (
+        timeline_count_after_second
+        == timeline_count_after_first
+    )
+    assert (
+        audit_count_after_second
+        == audit_count_after_first
+    )

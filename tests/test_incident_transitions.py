@@ -28,14 +28,6 @@ from app.models import IncidentStatus
             IncidentStatus.REMEDIATING,
         ),
         (
-            IncidentStatus.INVESTIGATING,
-            IncidentStatus.RESOLVED,
-        ),
-        (
-            IncidentStatus.ACTION_RECOMMENDED,
-            IncidentStatus.INVESTIGATING,
-        ),
-        (
             IncidentStatus.ACTION_RECOMMENDED,
             IncidentStatus.REMEDIATING,
         ),
@@ -83,6 +75,18 @@ def test_allows_valid_incident_transition(
             IncidentStatus.ACTION_RECOMMENDED,
         ),
         (
+            IncidentStatus.ACKNOWLEDGED,
+            IncidentStatus.RESOLVED,
+        ),
+        (
+            IncidentStatus.INVESTIGATING,
+            IncidentStatus.RESOLVED,
+        ),
+        (
+            IncidentStatus.ACTION_RECOMMENDED,
+            IncidentStatus.INVESTIGATING,
+        ),
+        (
             IncidentStatus.ACTION_RECOMMENDED,
             IncidentStatus.RESOLVED,
         ),
@@ -114,11 +118,17 @@ def test_rejects_invalid_incident_transition(
 
 
 def test_resolved_incident_has_no_allowed_transitions() -> None:
-    assert ALLOWED_TRANSITIONS[IncidentStatus.RESOLVED] == set()
+    assert (
+        ALLOWED_TRANSITIONS[IncidentStatus.RESOLVED]
+        == set()
+    )
 
 
 def test_repeating_same_status_is_not_a_valid_transition() -> None:
-    with pytest.raises(InvalidIncidentTransitionError):
+    with pytest.raises(
+        InvalidIncidentTransitionError,
+        match="already in status ACKNOWLEDGED",
+    ):
         validate_status_transition(
             current_status=IncidentStatus.ACKNOWLEDGED,
             requested_status=IncidentStatus.ACKNOWLEDGED,

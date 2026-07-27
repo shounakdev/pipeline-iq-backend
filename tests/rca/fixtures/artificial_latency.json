@@ -1,0 +1,55 @@
+{
+  "scenario": "artificial_latency",
+  "evidence": {
+    "incident_id": "INC-LATENCY",
+    "affected_service": "payment-service",
+    "sources": {
+      "deployment": {
+        "status": "COLLECTED",
+        "version": "v1.8.2",
+        "deployed_minutes_before_alert": 2
+      },
+      "metrics": {
+        "status": "COLLECTED",
+        "p95_latency_before_ms": 180,
+        "p95_latency_after_ms": 2100,
+        "p95_latency_change_ms": 1920,
+        "http_500_rate_before": 0.01,
+        "http_500_rate_after": 0.01
+      },
+      "logs": {
+        "status": "COLLECTED",
+        "database_timeout_errors": 0,
+        "uncaught_exception_errors": 0
+      },
+      "kubernetes": {
+        "status": "COLLECTED",
+        "restart_delta": 0,
+        "available_replicas_before": 3,
+        "available_replicas_after": 3
+      }
+    }
+  },
+  "expected_report": {
+    "primary_category": "APPLICATION_REGRESSION",
+    "confidence": "MEDIUM",
+    "supporting_evidence": [
+      {
+        "claim": "Latency increased sharply after deployment.",
+        "evidence_path": "$.sources.metrics.p95_latency_after_ms"
+      },
+      {
+        "claim": "Deployment occurred shortly before the alert.",
+        "evidence_path": "$.sources.deployment.deployed_minutes_before_alert"
+      }
+    ],
+    "alternative_hypotheses": [
+      {
+        "category": "DATABASE_DEPENDENCY",
+        "reason": "Database timeout evidence is absent.",
+        "contradicting_evidence_path": "$.sources.logs.database_timeout_errors"
+      }
+    ],
+    "missing_evidence": []
+  }
+}

@@ -1,0 +1,65 @@
+from enum import Enum
+
+
+class RCAEvidenceSource(str, Enum):
+    INCIDENT = "INCIDENT"
+    ALERT = "ALERT"
+    DEPLOYMENT = "DEPLOYMENT"
+    PIPELINE = "PIPELINE"
+    PROMETHEUS = "PROMETHEUS"
+    SERVICE_HEALTH = "SERVICE_HEALTH"
+    SLO = "SLO"
+    ERROR_BUDGET = "ERROR_BUDGET"
+    KUBERNETES = "KUBERNETES"
+    LOKI = "LOKI"
+    TRACE = "TRACE"
+    KUBERNETES_EVENT = "KUBERNETES_EVENT"
+    HUMAN_CONTEXT = "HUMAN_CONTEXT"
+
+
+class RCAEvidenceAvailability(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    PARTIAL = "PARTIAL"
+    UNAVAILABLE = "UNAVAILABLE"
+    FAILED = "FAILED"
+
+
+class RCAJobStatus(str, Enum):
+    PENDING = "PENDING"
+    COLLECTING_EVIDENCE = "COLLECTING_EVIDENCE"
+    EVIDENCE_READY = "EVIDENCE_READY"
+    GENERATING = "GENERATING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class RCAConfidenceLevel(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    
+class EvidenceCollectionStatus(str, Enum):
+    PENDING = "PENDING"
+    COLLECTING = "COLLECTING"
+    COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+
+
+class RCAReportStatus(str, Enum):
+    PENDING = "PENDING"
+    GENERATING = "GENERATING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class RCAConfidence(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class RCAFeedbackRating(str, Enum):
+    CORRECT = "CORRECT"
+    PARTIALLY_CORRECT = "PARTIALLY_CORRECT"
+    INCORRECT = "INCORRECT"

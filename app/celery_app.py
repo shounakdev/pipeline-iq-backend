@@ -40,6 +40,7 @@ celery_app = Celery(
     include=[
         "app.tasks",
         "app.reliability.tasks",
+        "app.rca.tasks.rca_generation_task",
     ],
 )
 
@@ -60,6 +61,9 @@ task_routes = {
     },
     "app.reliability.tasks.evaluate_all_slos": {
         "queue": "pipeline_queue",
+    },
+    "app.rca.tasks.generate_rca": {
+        "queue": "celery",
     },
 }
 

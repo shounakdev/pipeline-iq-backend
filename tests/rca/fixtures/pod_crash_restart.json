@@ -1,0 +1,51 @@
+{
+  "scenario": "pod_crash_restart",
+  "evidence": {
+    "incident_id": "INC-POD-CRASH",
+    "affected_service": "payment-service",
+    "sources": {
+      "metrics": {
+        "status": "COLLECTED",
+        "http_500_rate_before": 0.02,
+        "http_500_rate_after": 0.19,
+        "p95_latency_before_ms": 220,
+        "p95_latency_after_ms": 1500
+      },
+      "logs": {
+        "status": "COLLECTED",
+        "database_timeout_errors": 0,
+        "out_of_memory_errors": 6
+      },
+      "kubernetes": {
+        "status": "COLLECTED",
+        "restart_delta": 5,
+        "crash_loop_backoff_count": 3,
+        "oom_killed_count": 2,
+        "available_replicas_before": 3,
+        "available_replicas_after": 1
+      }
+    }
+  },
+  "expected_report": {
+    "primary_category": "KUBERNETES_RUNTIME",
+    "confidence": "HIGH",
+    "supporting_evidence": [
+      {
+        "claim": "Pod restarts increased during the incident.",
+        "evidence_path": "$.sources.kubernetes.restart_delta"
+      },
+      {
+        "claim": "Replica availability dropped.",
+        "evidence_path": "$.sources.kubernetes.available_replicas_after"
+      }
+    ],
+    "alternative_hypotheses": [
+      {
+        "category": "DATABASE_DEPENDENCY",
+        "reason": "Database dependency errors are absent.",
+        "contradicting_evidence_path": "$.sources.logs.database_timeout_errors"
+      }
+    ],
+    "missing_evidence": []
+  }
+}

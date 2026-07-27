@@ -89,6 +89,12 @@ def _raise_incident_error(
             detail=str(error),
         ) from error
 
+    if isinstance(error, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
     raise error
 
 

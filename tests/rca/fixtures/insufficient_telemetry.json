@@ -1,0 +1,57 @@
+{
+  "scenario": "insufficient_telemetry",
+  "evidence": {
+    "incident_id": "INC-UNKNOWN",
+    "affected_service": "payment-service",
+    "sources": {
+      "metrics": {
+        "status": "COLLECTED",
+        "http_500_rate_after": 0.08
+      },
+      "logs": {
+        "status": "NO_DATA",
+        "reason": "Loki unavailable"
+      },
+      "traces": {
+        "status": "NO_DATA",
+        "reason": "Trace backend unavailable"
+      },
+      "deployment": {
+        "status": "NO_DATA",
+        "reason": "No deployment found in correlation window"
+      },
+      "kubernetes": {
+        "status": "NO_DATA",
+        "reason": "Kubernetes API timeout"
+      }
+    }
+  },
+  "expected_report": {
+    "primary_category": "UNKNOWN",
+    "confidence": "LOW",
+    "supporting_evidence": [
+      {
+        "claim": "Only weak metric evidence is available.",
+        "evidence_path": "$.sources.metrics.http_500_rate_after"
+      }
+    ],
+    "alternative_hypotheses": [],
+    "missing_evidence": [
+      {
+        "source": "logs",
+        "reason": "Log evidence unavailable",
+        "evidence_path": "$.sources.logs.reason"
+      },
+      {
+        "source": "traces",
+        "reason": "Trace evidence unavailable",
+        "evidence_path": "$.sources.traces.reason"
+      },
+      {
+        "source": "deployment",
+        "reason": "Deployment correlation unavailable",
+        "evidence_path": "$.sources.deployment.reason"
+      }
+    ]
+  }
+}
