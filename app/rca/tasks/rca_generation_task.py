@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from fastapi.encoders import jsonable_encoder
+
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models import IncidentEvidence, RCAReport
@@ -7,7 +9,18 @@ from app.rca.collectors.evidence_collector import collect_native_evidence
 from app.rca.llm.gateway import generate_rca_from_evidence
 
 
-def utcnow():
+EVIDENCE_SOURCES = (
+    "deployment",
+    "pipeline",
+    "slo",
+    "metrics",
+    "logs",
+    "traces",
+    "kubernetes",
+)
+
+
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
@@ -24,6 +37,53 @@ def _as_dict(value):
     return value
 
 
+def _normalise_evidence_status(value: str | None) -> str:
+    status = str(value or "").upper()
+
+    if status in {"COMPLETE", "COMPLETED"}:
+        return "COMPLETED"
+
+    if status == "FAILED":
+        return "FAILED"
+
+    return "PARTIAL"
+
+
+def _build_source_statuses(evidence_bundle: dict) -> dict:
+    statuses = {}
+
+    for source in EVIDENCE_SOURCES:
+        source_payload = evidence_bundle.get(source)
+
+        if isinstance(source_payload, dict):
+            statuses[source] = source_payload.get(
+                "status",
+                "NO_DATA",
+            )
+        else:
+            statuses[source] = "NO_DATA"
+
+    return statuses
+
+
+def _normalise_report_payload(report_payload: dict) -> dict:
+    payload = dict(report_payload)
+
+    if "supporting_evidence" not in payload:
+        payload["supporting_evidence"] = payload.get(
+            "supporting_observations",
+            [],
+        )
+
+    if "contradictory_evidence" not in payload:
+        payload["contradictory_evidence"] = payload.get(
+            "contradicting_observations",
+            [],
+        )
+
+    return payload
+
+
 def build_fallback_rca_report(
     evidence_bundle: dict,
     error: Exception,
@@ -38,9 +98,7 @@ def build_fallback_rca_report(
             "RCA generation could not produce a strict LLM report because "
             "the collected evidence bundle did not match the expected RCA schema."
         ),
-        "root_cause_category": (
-            "INSUFFICIENT_STRUCTURED_EVIDENCE"
-        ),
+        "root_cause_category": "INSUFFICIENT_STRUCTURED_EVIDENCE",
         "confidence": "LOW",
         "confidence_explanation": (
             "Confidence is low because evidence was collected, but the bundle "
@@ -54,14 +112,15 @@ def build_fallback_rca_report(
                 "evidence_path": "evidence_bundle",
             }
         ],
+        "contradictory_evidence": [],
         "recommended_actions": [
             (
                 "Recommended investigation: align evidence collector output "
                 "with IncidentEvidenceBundle schema."
             ),
             (
-                "Suggested validation step: ensure time_window, source metadata, "
-                "and derived fact fields are present."
+                "Suggested validation step: ensure time-window, source metadata, "
+                "and derived-fact fields are present."
             ),
         ],
         "alternative_hypotheses": [],
@@ -79,7 +138,6 @@ def generate_rca_task(
     model: str = "gpt-4.1-mini",
 ):
     db = SessionLocal()
-    started_at = utcnow()
 
     try:
         evidence = (
@@ -87,6 +145,7 @@ def generate_rca_task(
             .filter(IncidentEvidence.id == evidence_id)
             .first()
         )
+
         report = (
             db.query(RCAReport)
             .filter(RCAReport.id == report_id)
@@ -97,29 +156,33 @@ def generate_rca_task(
             return
 
         evidence.status = "COLLECTING"
-        evidence.collection_started_at = utcnow()
         db.commit()
 
-        evidence_bundle = collect_native_evidence(
+        collected_evidence = collect_native_evidence(
             db,
             incident_id,
         )
 
-        evidence.evidence_json = evidence_bundle
-        evidence.completeness_score = evidence_bundle.get(
-            "completeness_score"
+        evidence_bundle = jsonable_encoder(
+            collected_evidence,
         )
-        evidence.status = evidence_bundle.get(
-            "status",
-            "PARTIAL",
+
+        evidence.evidence_payload = evidence_bundle
+        evidence.source_statuses = _build_source_statuses(
+            evidence_bundle,
         )
-        evidence.collection_completed_at = utcnow()
+        evidence.collection_errors = evidence_bundle.get(
+            "collector_errors",
+            [],
+        )
+        evidence.status = _normalise_evidence_status(
+            evidence_bundle.get("status"),
+        )
 
         db.commit()
         db.refresh(evidence)
 
         report.status = "GENERATING"
-        report.generation_started_at = utcnow()
         db.commit()
 
         try:
@@ -128,7 +191,14 @@ def generate_rca_task(
                 prompt_version=prompt_version,
                 model=model,
             )
-            report_payload = _as_dict(llm_response)
+
+            raw_report_payload = _as_dict(
+                llm_response,
+            )
+
+            report_payload = _normalise_report_payload(
+                jsonable_encoder(raw_report_payload),
+            )
         except Exception as validation_error:
             report_payload = build_fallback_rca_report(
                 evidence_bundle=evidence_bundle,
@@ -136,20 +206,41 @@ def generate_rca_task(
             )
 
         report.report_json = report_payload
-        report.status = "COMPLETED"
-
-        if isinstance(report_payload, dict):
-            report.confidence = report_payload.get(
-                "confidence"
-            )
-        else:
-            report.confidence = None
-
-        report.generation_completed_at = utcnow()
-        report.generation_duration_ms = int(
-            (utcnow() - started_at).total_seconds()
-            * 1000
+        report.probable_root_cause = report_payload.get(
+            "probable_root_cause",
         )
+        report.summary = report_payload.get(
+            "confidence_explanation",
+        )
+        report.confidence = report_payload.get(
+            "confidence",
+        )
+        report.supporting_evidence = report_payload.get(
+            "supporting_evidence",
+            [],
+        )
+        report.contradictory_evidence = report_payload.get(
+            "contradictory_evidence",
+            [],
+        )
+        report.alternative_hypotheses = report_payload.get(
+            "alternative_hypotheses",
+            [],
+        )
+        report.missing_evidence = report_payload.get(
+            "missing_evidence",
+            [],
+        )
+        report.model_provider = report_payload.get(
+            "model",
+        )
+        report.model_name = model
+        report.prompt_version = report_payload.get(
+            "prompt_version",
+            prompt_version,
+        )
+        report.generated_at = utcnow()
+        report.status = "COMPLETED"
 
         db.commit()
 
@@ -161,6 +252,7 @@ def generate_rca_task(
             .filter(RCAReport.id == report_id)
             .first()
         )
+
         evidence = (
             db.query(IncidentEvidence)
             .filter(IncidentEvidence.id == evidence_id)
@@ -169,12 +261,23 @@ def generate_rca_task(
 
         if report:
             report.status = "FAILED"
-            report.error_message = str(exc)
-            report.generation_completed_at = utcnow()
+            report.summary = str(exc)
+            report.generated_at = utcnow()
 
         if evidence:
             evidence.status = "FAILED"
-            evidence.collection_completed_at = utcnow()
+
+            existing_errors = list(
+                evidence.collection_errors or [],
+            )
+            existing_errors.append(
+                {
+                    "source": "rca_generation_task",
+                    "error": str(exc),
+                    "occurred_at": utcnow().isoformat(),
+                }
+            )
+            evidence.collection_errors = existing_errors
 
         db.commit()
         raise

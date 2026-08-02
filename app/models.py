@@ -5,6 +5,7 @@ from app.incidents.enums import IncidentSeverity, IncidentStatus
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum as SQLEnum,
@@ -194,6 +195,10 @@ class Service(Base):
         "ServiceHealthSnapshot",
         back_populates="service",
         cascade="all, delete-orphan",
+    )
+    remediation_recommendations = relationship(
+        "RemediationRecommendation",
+        back_populates="service",
     )
 
 
@@ -648,6 +653,12 @@ class Incident(Base):
         cascade="all, delete-orphan",
     )
 
+    remediation_recommendations = relationship(
+        "RemediationRecommendation",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+    )
+
     severity = Column(
         incident_severity_enum,
         nullable=False,
@@ -780,19 +791,19 @@ class Incident(Base):
     service_id = Column(
         String,
         nullable=True,
-        index=True,
+
     )
 
     correlation_id = Column(
         String,
         nullable=True,
-        index=True,
+
     )
 
     triggered_by_event_id = Column(
         String,
         nullable=True,
-        index=True,
+
     )
 
     started_at = Column(
@@ -1470,6 +1481,12 @@ class RCAReport(Base):
     contradictory_evidence = Column(JSONB, nullable=False, default=list)
     alternative_hypotheses = Column(JSONB, nullable=False, default=list)
     missing_evidence = Column(JSONB, nullable=False, default=list)
+    report_json = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
 
     model_provider = Column(String(100), nullable=True)
     model_name = Column(String(100), nullable=True)
@@ -1570,7 +1587,494 @@ class RCAFeedback(Base):
             "created_at",
         ),
     )
-    
+
+
+# ============================================================
+# Sprint 9A — Remediation Data Model Foundation
+# ============================================================
+
+
+class RecommendationStatus(str, enum.Enum):
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXECUTING = "EXECUTING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    RECOVERY_VERIFIED = "RECOVERY_VERIFIED"
+    RECOVERY_FAILED = "RECOVERY_FAILED"
+
+
+class ActionType(str, enum.Enum):
+    ROLLBACK_DEPLOYMENT = "ROLLBACK_DEPLOYMENT"
+    RESTART_POD = "RESTART_POD"
+    SCALE_REPLICAS = "SCALE_REPLICAS"
+    REDEPLOY_REVISION = "REDEPLOY_REVISION"
+
+
+class ApprovalDecision(str, enum.Enum):
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class RemediationExecutionStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class RecoveryVerificationStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    VERIFIED = "VERIFIED"
+    FAILED = "FAILED"
+
+
+recommendation_status_enum = SQLEnum(
+    RecommendationStatus,
+    name="recommendation_status",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+remediation_action_type_enum = SQLEnum(
+    ActionType,
+    name="remediation_action_type",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+approval_decision_enum = SQLEnum(
+    ApprovalDecision,
+    name="remediation_approval_decision",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+remediation_execution_status_enum = SQLEnum(
+    RemediationExecutionStatus,
+    name="remediation_execution_status",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+recovery_verification_status_enum = SQLEnum(
+    RecoveryVerificationStatus,
+    name="recovery_verification_status",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+class RemediationRecommendation(Base):
+    __tablename__ = "remediation_recommendations"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    incident_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    service_id = Column(
+        String(36),
+        ForeignKey("services.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    environment = Column(
+        String(100),
+        nullable=False,
+    )
+
+    action_type = Column(
+        remediation_action_type_enum,
+        nullable=False,
+    )
+
+    reason = Column(
+        Text,
+        nullable=False,
+    )
+
+    evidence_summary = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+    )
+
+    confidence = Column(
+        SQLEnum(
+            RCAConfidence,
+            name="rca_confidence",
+            values_callable=enum_values,
+            validate_strings=True,
+        ),
+        nullable=False,
+    )
+
+    status = Column(
+        recommendation_status_enum,
+        nullable=False,
+        default=RecommendationStatus.PENDING_APPROVAL,
+        server_default=RecommendationStatus.PENDING_APPROVAL.value,
+    )
+
+    created_by = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    incident = relationship(
+        "Incident",
+        back_populates="remediation_recommendations",
+    )
+
+    service = relationship(
+        "Service",
+        back_populates="remediation_recommendations",
+    )
+
+    creator = relationship(
+        "User",
+        foreign_keys=[created_by],
+    )
+
+    approval = relationship(
+        "RemediationApproval",
+        back_populates="remediation",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    executions = relationship(
+        "RemediationExecution",
+        back_populates="remediation",
+        cascade="all, delete-orphan",
+        order_by="RemediationExecution.created_at",
+    )
+
+    recovery_verifications = relationship(
+        "RecoveryVerification",
+        back_populates="remediation",
+        cascade="all, delete-orphan",
+        order_by="RecoveryVerification.created_at",
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_remediation_recommendations_incident_created",
+            "incident_id",
+            "created_at",
+        ),
+        Index(
+            "ix_remediation_recommendations_service_environment",
+            "service_id",
+            "environment",
+        ),
+        Index(
+            "ix_remediation_recommendations_status",
+            "status",
+        ),
+    )
+
+
+class RemediationApproval(Base):
+    __tablename__ = "remediation_approvals"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    remediation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "remediation_recommendations.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False
+    )
+
+    approved_by = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    decision = Column(
+        approval_decision_enum,
+        nullable=False,
+    )
+
+    rejection_reason = Column(
+        Text,
+        nullable=True,
+    )
+
+    approved_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    remediation = relationship(
+        "RemediationRecommendation",
+        back_populates="approval",
+    )
+
+    approver = relationship(
+        "User",
+        foreign_keys=[approved_by],
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "decision != 'REJECTED' OR "
+            "(rejection_reason IS NOT NULL "
+            "AND length(trim(rejection_reason)) > 0)",
+            name=(
+                "ck_remediation_approval_"
+                "rejection_reason"
+            ),
+        ),
+        UniqueConstraint(
+            "remediation_id",
+            name=(
+                "uq_remediation_approvals_"
+                "remediation_id"
+            ),
+        ),
+        Index(
+            "ix_remediation_approvals_remediation_id",
+            "remediation_id",
+        ),
+    )
+
+
+class RemediationExecution(Base):
+    __tablename__ = "remediation_executions"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    remediation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "remediation_recommendations.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+
+    command_type = Column(
+        remediation_action_type_enum,
+        nullable=False,
+    )
+
+    command_payload = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+    )
+
+    execution_status = Column(
+        remediation_execution_status_enum,
+        nullable=False,
+        default=RemediationExecutionStatus.PENDING,
+        server_default=RemediationExecutionStatus.PENDING.value,
+    )
+
+    started_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    completed_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    result_summary = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+    )
+
+    error_message = Column(
+        Text,
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    remediation = relationship(
+        "RemediationRecommendation",
+        back_populates="executions",
+    )
+
+    recovery_verification = relationship(
+        "RecoveryVerification",
+        back_populates="execution",
+        uselist=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "remediation_id",
+            name=(
+                "uq_remediation_executions_"
+                "remediation_id"
+            ),
+        ),
+        CheckConstraint(
+            "completed_at IS NULL OR started_at IS NULL "
+            "OR completed_at >= started_at",
+            name="ck_remediation_execution_timestamp_order",
+        ),
+        Index(
+            "ix_remediation_executions_remediation_status",
+            "remediation_id",
+            "execution_status",
+        ),
+        Index(
+            "ix_remediation_executions_started_at",
+            "started_at",
+        ),
+    )
+
+
+class RecoveryVerification(Base):
+    __tablename__ = "recovery_verifications"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    remediation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "remediation_recommendations.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+
+    remediation_execution_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "remediation_executions.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        unique=True,
+    )
+
+    verification_status = Column(
+        recovery_verification_status_enum,
+        nullable=False,
+        default=RecoveryVerificationStatus.PENDING,
+        server_default=RecoveryVerificationStatus.PENDING.value,
+    )
+
+    error_rate_recovered = Column(
+        Boolean,
+        nullable=True,
+    )
+
+    latency_recovered = Column(
+        Boolean,
+        nullable=True,
+    )
+
+    pods_healthy = Column(
+        Boolean,
+        nullable=True,
+    )
+
+    restart_loop_absent = Column(
+        Boolean,
+        nullable=True,
+    )
+
+    availability_restored = Column(
+        Boolean,
+        nullable=True,
+    )
+
+    metrics_snapshot = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+    )
+
+    verified_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    remediation = relationship(
+        "RemediationRecommendation",
+        back_populates="recovery_verifications",
+    )
+
+    execution = relationship(
+        "RemediationExecution",
+        back_populates="recovery_verification",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "verification_status = 'PENDING' "
+            "OR verified_at IS NOT NULL",
+            name="ck_recovery_verification_verified_at",
+        ),
+        Index(
+            "ix_recovery_verifications_remediation_id",
+            "remediation_id",
+        ),
+    )
+
+
 class SLOMetricType(str, enum.Enum):
     AVAILABILITY = "AVAILABILITY"
     P95_LATENCY = "P95_LATENCY"

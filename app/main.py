@@ -3,6 +3,10 @@ import logging
 import os
 import time
 
+from app.remediation.router import (
+    remediation_action_router,
+    router as remediation_router,
+)
 from datetime import datetime
 from uuid import uuid4
 
@@ -57,6 +61,8 @@ app = FastAPI(
 )
 
 app.include_router(rca_router)
+app.include_router(remediation_router)
+app.include_router(remediation_action_router)
 
 
 @app.exception_handler(IncidentNotFoundError)

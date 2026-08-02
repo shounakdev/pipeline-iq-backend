@@ -1,7 +1,10 @@
 from datetime import datetime
 
 
-def calculate_minutes_between(start: datetime | None, end: datetime | None) -> int | None:
+def calculate_minutes_between(
+    start: datetime | None,
+    end: datetime | None,
+) -> int | None:
     if not start or not end:
         return None
 
@@ -22,14 +25,19 @@ def build_deployment_temporal_correlation_fact(
         if not deployed_at or not failure_started_at:
             return None
 
-        minutes = calculate_minutes_between(deployed_at, failure_started_at)
+        minutes = calculate_minutes_between(
+            deployed_at,
+            failure_started_at,
+        )
 
     if minutes is None or minutes < 0:
         return None
 
     return {
         "fact_type": "DEPLOYMENT_TEMPORAL_CORRELATION",
-        "description": f"Deployment completed {minutes} minutes before failure began.",
+        "description": (
+            f"Deployment completed {minutes} minutes before failure began."
+        ),
         "evidence_paths": [
             "deployment.deployed_at",
             "incident.failure_started_at",
@@ -37,7 +45,9 @@ def build_deployment_temporal_correlation_fact(
     }
 
 
-def build_slo_breach_fact(slo: dict) -> dict | None:
+def build_slo_breach_fact(
+    slo: dict,
+) -> dict | None:
     if slo.get("status") != "COLLECTED":
         return None
 
@@ -48,7 +58,10 @@ def build_slo_breach_fact(slo: dict) -> dict | None:
 
     return {
         "fact_type": "SLO_BREACH",
-        "description": "A reliability alert indicates the measured value breached the configured threshold.",
+        "description": (
+            "A reliability alert indicates the measured value breached "
+            "the configured threshold."
+        ),
         "evidence_paths": [
             "slo.measured_value",
             "slo.target",
@@ -66,14 +79,16 @@ def build_derived_facts(
 
     if deployment and deployment.get("status") == "COLLECTED":
         deployment_fact = build_deployment_temporal_correlation_fact(
-            deployment,
-            incident,
+            deployment=deployment,
+            incident=incident,
         )
+
         if deployment_fact:
             facts.append(deployment_fact)
 
     if slo and slo.get("status") == "COLLECTED":
-        slo_fact = build_slo_breach_fact(slo)
+        slo_fact = build_slo_breach_fact(slo=slo)
+
         if slo_fact:
             facts.append(slo_fact)
 
