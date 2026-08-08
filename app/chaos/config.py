@@ -50,6 +50,11 @@ class ChaosSettings:
     max_concurrent_runs: int
     watchdog_interval_seconds: int
     adapter_backend: str = "chaos-mesh"
+    max_detection_seconds: int = 30
+    max_alert_seconds: int = 60
+    max_incident_seconds: int = 90
+    max_diagnosis_seconds: int = 180
+    max_recovery_seconds: int = 600
 
     @classmethod
     def from_env(cls) -> "ChaosSettings":
@@ -80,6 +85,26 @@ class ChaosSettings:
                 "CHAOS_ADAPTER",
                 "chaos-mesh",
             ).strip().lower(),
+            max_detection_seconds=_positive_int(
+                "CHAOS_MAX_DETECTION_SECONDS",
+                30,
+            ),
+            max_alert_seconds=_positive_int(
+                "CHAOS_MAX_ALERT_SECONDS",
+                60,
+            ),
+            max_incident_seconds=_positive_int(
+                "CHAOS_MAX_INCIDENT_SECONDS",
+                90,
+            ),
+            max_diagnosis_seconds=_positive_int(
+                "CHAOS_MAX_DIAGNOSIS_SECONDS",
+                180,
+            ),
+            max_recovery_seconds=_positive_int(
+                "CHAOS_MAX_RECOVERY_SECONDS",
+                600,
+            ),
         )
 
         if settings.adapter_backend not in {

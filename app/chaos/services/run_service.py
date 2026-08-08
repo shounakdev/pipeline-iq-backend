@@ -14,13 +14,13 @@ from sqlalchemy.orm import Session
 from app.chaos import repository
 from app.chaos.adapters.base import BaseChaosAdapter
 from app.chaos.events import CHAOS_OBSERVATION_SOURCE
+from app.chaos.services.benchmark_service import calculate_benchmark
 from app.chaos.exceptions import (
     ChaosRunNotFoundError,
     ChaosRunTimeoutError,
 )
 from app.chaos.kubernetes_adapter import build_podchaos_manifest
 from app.models import (
-    BenchmarkStatus,
     ChaosObservationType,
     ChaosRun,
     ChaosRunStatus,
@@ -64,12 +64,6 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def _millis(start: datetime | None, end: datetime | None) -> int | None:
-    if start is None or end is None:
-        return None
-    return max(0, int((_as_utc(end) - _as_utc(start)).total_seconds() * 1000))
 
 
 def _injected_at(resource: dict[str, Any]) -> datetime:
@@ -292,64 +286,6 @@ class DatabasePlatformIQObserver:
                 repository.link_run_artifacts(
                     db, chaos_run=run, recovery_verification_id=verification.id
                 )
-
-
-def calculate_benchmark(
-    db: Session,
-    run: ChaosRun,
-    *,
-    successful: bool,
-) -> None:
-    observations = repository.list_observations_for_run(db, run.id)
-    first: dict[ChaosObservationType, datetime] = {}
-    for item in observations:
-        first.setdefault(item.observation_type, item.observed_at)
-
-    injected = run.failure_injected_at or first.get(
-        ChaosObservationType.FAILURE_INJECTED
-    )
-    anomaly = first.get(ChaosObservationType.TELEMETRY_ANOMALY)
-    alert = first.get(ChaosObservationType.ALERT_CREATED)
-    incident = first.get(ChaosObservationType.INCIDENT_CREATED)
-    rca = first.get(ChaosObservationType.RCA_COMPLETED)
-    approval = first.get(ChaosObservationType.REMEDIATION_APPROVED)
-    recovery = first.get(ChaosObservationType.RECOVERY_COMPLETED)
-    actual_root_cause = None
-    if run.rca_report_id:
-        report = db.get(RCAReport, run.rca_report_id)
-        actual_root_cause = report.probable_root_cause if report else None
-
-    repository.save_benchmark(
-        db,
-        chaos_run_id=run.id,
-        values={
-            "failure_injection_timestamp": injected,
-            "first_anomaly_timestamp": anomaly,
-            "alert_creation_timestamp": alert,
-            "incident_creation_timestamp": incident,
-            "rca_completion_timestamp": rca,
-            "remediation_approval_timestamp": approval,
-            "recovery_completion_timestamp": recovery,
-            "time_to_detect_ms": _millis(injected, anomaly),
-            "time_to_alert_ms": _millis(injected, alert),
-            "time_to_incident_ms": _millis(injected, incident),
-            "time_to_diagnose_ms": _millis(incident, rca),
-            "time_to_approve_ms": _millis(rca, approval),
-            "time_to_recover_ms": _millis(injected, recovery),
-            "expected_root_cause": run.experiment.expected_behavior.get(
-                "root_cause"
-            ),
-            "actual_root_cause": actual_root_cause,
-            "detection_succeeded": anomaly is not None,
-            "recovery_succeeded": recovery is not None,
-            "benchmark_status": (
-                BenchmarkStatus.PASSED if successful
-                else BenchmarkStatus.FAILED
-            ),
-            "calculated_at": datetime.now(timezone.utc),
-        },
-    )
-    db.commit()
 
 
 def execute_run(
