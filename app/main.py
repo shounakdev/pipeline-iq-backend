@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 
 from app.remediation.router import (
     remediation_action_router,
@@ -25,6 +26,9 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import require_roles
 from app.auth.router import router as auth_router
 from app.control_plane.routes import router as control_plane_router
+from app.chaos.config import ChaosSettings
+from app.chaos.reconciliation import reconcile_startup_runs_once
+from app.chaos.router import router as chaos_router
 from app.database import get_db
 from app.deployments.router import router as deployments_router
 from app.events.constants import PIPELINE_STARTED
@@ -49,6 +53,11 @@ from app.tasks import execute_pipeline_task
 logger = logging.getLogger(__name__)
 
 
+@asynccontextmanager
+async def application_lifespan(_app: FastAPI):
+    if os.getenv("TESTING") != "1" and ChaosSettings.from_env().enabled:
+        reconcile_startup_runs_once()
+    yield
 
 
 app = FastAPI(
@@ -58,11 +67,13 @@ app = FastAPI(
         "AI failure analysis, and quality gates."
     ),
     version="1.0.0",
+    lifespan=application_lifespan,
 )
 
 app.include_router(rca_router)
 app.include_router(remediation_router)
 app.include_router(remediation_action_router)
+app.include_router(chaos_router)
 
 
 @app.exception_handler(IncidentNotFoundError)

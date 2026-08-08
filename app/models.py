@@ -200,6 +200,10 @@ class Service(Base):
         "RemediationRecommendation",
         back_populates="service",
     )
+    chaos_experiments = relationship(
+        "ChaosExperiment",
+        back_populates="target_service",
+    )
 
 
 class ServiceHealthStatus(str, enum.Enum):
@@ -657,6 +661,12 @@ class Incident(Base):
         "RemediationRecommendation",
         back_populates="incident",
         cascade="all, delete-orphan",
+    )
+
+    chaos_runs = relationship(
+        "ChaosRun",
+        back_populates="incident",
+        foreign_keys="ChaosRun.incident_id",
     )
 
     severity = Column(
@@ -1516,6 +1526,12 @@ class RCAReport(Base):
         cascade="all, delete-orphan",
     )
 
+    chaos_runs = relationship(
+        "ChaosRun",
+        back_populates="rca_report",
+        foreign_keys="ChaosRun.rca_report_id",
+    )
+
     __table_args__ = (
         UniqueConstraint(
             "incident_id",
@@ -1784,6 +1800,12 @@ class RemediationRecommendation(Base):
         order_by="RecoveryVerification.created_at",
     )
 
+    chaos_runs = relationship(
+        "ChaosRun",
+        back_populates="remediation",
+        foreign_keys="ChaosRun.remediation_id",
+    )
+
     __table_args__ = (
         Index(
             "ix_remediation_recommendations_incident_created",
@@ -1950,6 +1972,12 @@ class RemediationExecution(Base):
         uselist=False,
     )
 
+    chaos_runs = relationship(
+        "ChaosRun",
+        back_populates="remediation_execution",
+        foreign_keys="ChaosRun.remediation_execution_id",
+    )
+
     __table_args__ = (
         UniqueConstraint(
             "remediation_id",
@@ -2062,6 +2090,12 @@ class RecoveryVerification(Base):
         back_populates="recovery_verification",
     )
 
+    chaos_runs = relationship(
+        "ChaosRun",
+        back_populates="recovery_verification",
+        foreign_keys="ChaosRun.recovery_verification_id",
+    )
+
     __table_args__ = (
         CheckConstraint(
             "verification_status = 'PENDING' "
@@ -2071,6 +2105,469 @@ class RecoveryVerification(Base):
         Index(
             "ix_recovery_verifications_remediation_id",
             "remediation_id",
+        ),
+    )
+
+
+# ============================================================
+# Sprint 10A — Chaos Data Model Foundation
+# ============================================================
+
+
+class ChaosScenarioType(str, enum.Enum):
+    FAULTY_RELEASE = "FAULTY_RELEASE"
+    POD_KILL = "POD_KILL"
+    NETWORK_DELAY = "NETWORK_DELAY"
+    DATABASE_DELAY = "DATABASE_DELAY"
+    CPU_PRESSURE = "CPU_PRESSURE"
+
+
+class ChaosRunStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    FAULT_INJECTED = "FAULT_INJECTED"
+    OBSERVING = "OBSERVING"
+    RECOVERING = "RECOVERING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    ABORTED = "ABORTED"
+
+
+class ChaosObservationType(str, enum.Enum):
+    FAILURE_INJECTED = "FAILURE_INJECTED"
+    TELEMETRY_ANOMALY = "TELEMETRY_ANOMALY"
+    ALERT_CREATED = "ALERT_CREATED"
+    INCIDENT_CREATED = "INCIDENT_CREATED"
+    RCA_COMPLETED = "RCA_COMPLETED"
+    REMEDIATION_RECOMMENDED = "REMEDIATION_RECOMMENDED"
+    REMEDIATION_APPROVED = "REMEDIATION_APPROVED"
+    REMEDIATION_EXECUTED = "REMEDIATION_EXECUTED"
+    RECOVERY_COMPLETED = "RECOVERY_COMPLETED"
+
+
+class DiagnosisRating(str, enum.Enum):
+    CORRECT = "CORRECT"
+    PARTIALLY_CORRECT = "PARTIALLY_CORRECT"
+    INCORRECT = "INCORRECT"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
+
+
+class BenchmarkStatus(str, enum.Enum):
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+    INCOMPLETE = "INCOMPLETE"
+
+
+chaos_scenario_type_enum = SQLEnum(
+    ChaosScenarioType,
+    name="chaos_scenario_type",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+chaos_run_status_enum = SQLEnum(
+    ChaosRunStatus,
+    name="chaos_run_status",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+chaos_observation_type_enum = SQLEnum(
+    ChaosObservationType,
+    name="chaos_observation_type",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+diagnosis_rating_enum = SQLEnum(
+    DiagnosisRating,
+    name="diagnosis_rating",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+benchmark_status_enum = SQLEnum(
+    BenchmarkStatus,
+    name="benchmark_status",
+    values_callable=enum_values,
+    validate_strings=True,
+)
+
+
+class ChaosExperiment(Base):
+    __tablename__ = "chaos_experiments"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    scenario_type = Column(
+        chaos_scenario_type_enum,
+        nullable=False,
+    )
+    target_service_id = Column(
+        String(36),
+        ForeignKey("services.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_environment = Column(String(100), nullable=False)
+    target_namespace = Column(String(255), nullable=False)
+    failure_type = Column(String(100), nullable=False)
+    failure_config = Column(JSONB, nullable=False, default=dict)
+    expected_behavior = Column(JSONB, nullable=False, default=dict)
+    enabled = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    created_by = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    target_service = relationship(
+        "Service",
+        back_populates="chaos_experiments",
+    )
+    creator = relationship("User", foreign_keys=[created_by])
+    runs = relationship(
+        "ChaosRun",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        order_by="ChaosRun.started_at, ChaosRun.id",
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_chaos_experiments_service_environment",
+            "target_service_id",
+            "target_environment",
+        ),
+        Index(
+            "ix_chaos_experiments_scenario_enabled",
+            "scenario_type",
+            "enabled",
+        ),
+    )
+
+
+class ChaosRun(Base):
+    __tablename__ = "chaos_runs"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    experiment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("chaos_experiments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(
+        chaos_run_status_enum,
+        nullable=False,
+        default=ChaosRunStatus.PENDING,
+        server_default=ChaosRunStatus.PENDING.value,
+    )
+    target_environment = Column(String(100), nullable=False)
+    target_service_id = Column(
+        String(36),
+        ForeignKey("services.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_namespace = Column(String(255), nullable=False)
+    duration_seconds = Column(Integer, nullable=False)
+    cleanup_behavior = Column(
+        String(32),
+        nullable=False,
+        default="delete",
+        server_default="delete",
+    )
+    deadline_at = Column(DateTime(timezone=True), nullable=False)
+    kubernetes_resource_kind = Column(String(100), nullable=True)
+    kubernetes_resource_name = Column(String(253), nullable=True)
+    kubernetes_resource_uid = Column(String(128), nullable=True)
+    cleanup_started_at = Column(DateTime(timezone=True), nullable=True)
+    cleanup_completed_at = Column(DateTime(timezone=True), nullable=True)
+    cleanup_succeeded = Column(Boolean, nullable=True)
+    cleanup_error = Column(Text, nullable=True)
+    triggered_by = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    failure_injected_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    aborted_at = Column(DateTime(timezone=True), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    incident_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("incidents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    rca_report_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("rca_reports.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    remediation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "remediation_recommendations.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+    remediation_execution_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("remediation_executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    recovery_verification_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("recovery_verifications.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    experiment = relationship("ChaosExperiment", back_populates="runs")
+    trigger_user = relationship("User", foreign_keys=[triggered_by])
+    incident = relationship(
+        "Incident",
+        back_populates="chaos_runs",
+        foreign_keys=[incident_id],
+    )
+    rca_report = relationship(
+        "RCAReport",
+        back_populates="chaos_runs",
+        foreign_keys=[rca_report_id],
+    )
+    remediation = relationship(
+        "RemediationRecommendation",
+        back_populates="chaos_runs",
+        foreign_keys=[remediation_id],
+    )
+    remediation_execution = relationship(
+        "RemediationExecution",
+        back_populates="chaos_runs",
+        foreign_keys=[remediation_execution_id],
+    )
+    recovery_verification = relationship(
+        "RecoveryVerification",
+        back_populates="chaos_runs",
+        foreign_keys=[recovery_verification_id],
+    )
+    observations = relationship(
+        "ChaosObservation",
+        back_populates="chaos_run",
+        cascade="all, delete-orphan",
+        order_by="ChaosObservation.observed_at, ChaosObservation.id",
+    )
+    benchmark = relationship(
+        "ExperimentBenchmark",
+        back_populates="chaos_run",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "completed_at IS NULL OR started_at IS NULL "
+            "OR completed_at >= started_at",
+            name="ck_chaos_run_completed_after_started",
+        ),
+        CheckConstraint(
+            "aborted_at IS NULL OR started_at IS NULL "
+            "OR aborted_at >= started_at",
+            name="ck_chaos_run_aborted_after_started",
+        ),
+        CheckConstraint(
+            "duration_seconds > 0",
+            name="ck_chaos_run_duration_positive",
+        ),
+        CheckConstraint(
+            "cleanup_behavior = 'delete'",
+            name="ck_chaos_run_cleanup_delete",
+        ),
+        CheckConstraint(
+            "cleanup_completed_at IS NULL "
+            "OR cleanup_started_at IS NOT NULL",
+            name="ck_chaos_run_cleanup_started",
+        ),
+        Index(
+            "ix_chaos_runs_experiment_started",
+            "experiment_id",
+            "started_at",
+        ),
+        Index("ix_chaos_runs_status", "status"),
+        Index("ix_chaos_runs_incident_id", "incident_id"),
+        Index("ix_chaos_runs_deadline", "deadline_at"),
+        Index(
+            "one_active_chaos_run_per_target",
+            "target_environment",
+            "target_service_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('PENDING', 'RUNNING', "
+                "'FAULT_INJECTED', 'OBSERVING', 'RECOVERING')"
+            ),
+            sqlite_where=text(
+                "status IN ('PENDING', 'RUNNING', "
+                "'FAULT_INJECTED', 'OBSERVING', 'RECOVERING')"
+            ),
+        ),
+    )
+
+
+class ChaosObservation(Base):
+    __tablename__ = "chaos_observations"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    chaos_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("chaos_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    observation_type = Column(
+        chaos_observation_type_enum,
+        nullable=False,
+    )
+    source = Column(String(100), nullable=False)
+    observed_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    resource_type = Column(String(100), nullable=True)
+    resource_id = Column(String(255), nullable=True)
+    details = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    chaos_run = relationship("ChaosRun", back_populates="observations")
+
+    __table_args__ = (
+        Index(
+            "ix_chaos_observations_run_observed",
+            "chaos_run_id",
+            "observed_at",
+        ),
+        Index(
+            "ix_chaos_observations_type_observed",
+            "observation_type",
+            "observed_at",
+        ),
+    )
+
+
+class ExperimentBenchmark(Base):
+    __tablename__ = "experiment_benchmarks"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    chaos_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("chaos_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    failure_injection_timestamp = Column(DateTime(timezone=True), nullable=True)
+    first_anomaly_timestamp = Column(DateTime(timezone=True), nullable=True)
+    alert_creation_timestamp = Column(DateTime(timezone=True), nullable=True)
+    incident_creation_timestamp = Column(DateTime(timezone=True), nullable=True)
+    rca_completion_timestamp = Column(DateTime(timezone=True), nullable=True)
+    remediation_approval_timestamp = Column(DateTime(timezone=True), nullable=True)
+    recovery_completion_timestamp = Column(DateTime(timezone=True), nullable=True)
+    time_to_detect_ms = Column(Integer, nullable=True)
+    time_to_alert_ms = Column(Integer, nullable=True)
+    time_to_incident_ms = Column(Integer, nullable=True)
+    time_to_diagnose_ms = Column(Integer, nullable=True)
+    time_to_approve_ms = Column(Integer, nullable=True)
+    time_to_recover_ms = Column(Integer, nullable=True)
+    diagnosis_rating = Column(
+        diagnosis_rating_enum,
+        nullable=False,
+        default=DiagnosisRating.NOT_AVAILABLE,
+        server_default=DiagnosisRating.NOT_AVAILABLE.value,
+    )
+    expected_root_cause = Column(Text, nullable=True)
+    actual_root_cause = Column(Text, nullable=True)
+    detection_succeeded = Column(Boolean, nullable=True)
+    recovery_succeeded = Column(Boolean, nullable=True)
+    benchmark_status = Column(
+        benchmark_status_enum,
+        nullable=False,
+        default=BenchmarkStatus.INCOMPLETE,
+        server_default=BenchmarkStatus.INCOMPLETE.value,
+    )
+    calculated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    chaos_run = relationship("ChaosRun", back_populates="benchmark")
+
+    __table_args__ = (
+        CheckConstraint(
+            "time_to_detect_ms IS NULL OR time_to_detect_ms >= 0",
+            name="ck_experiment_benchmark_detect_nonnegative",
+        ),
+        CheckConstraint(
+            "time_to_alert_ms IS NULL OR time_to_alert_ms >= 0",
+            name="ck_experiment_benchmark_alert_nonnegative",
+        ),
+        CheckConstraint(
+            "time_to_incident_ms IS NULL OR time_to_incident_ms >= 0",
+            name="ck_experiment_benchmark_incident_nonnegative",
+        ),
+        CheckConstraint(
+            "time_to_diagnose_ms IS NULL OR time_to_diagnose_ms >= 0",
+            name="ck_experiment_benchmark_diagnose_nonnegative",
+        ),
+        CheckConstraint(
+            "time_to_approve_ms IS NULL OR time_to_approve_ms >= 0",
+            name="ck_experiment_benchmark_approve_nonnegative",
+        ),
+        CheckConstraint(
+            "time_to_recover_ms IS NULL OR time_to_recover_ms >= 0",
+            name="ck_experiment_benchmark_recover_nonnegative",
+        ),
+        Index(
+            "ix_experiment_benchmarks_status_calculated",
+            "benchmark_status",
+            "calculated_at",
         ),
     )
 

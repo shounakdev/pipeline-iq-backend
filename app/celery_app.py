@@ -41,6 +41,7 @@ celery_app = Celery(
         "app.tasks",
         "app.reliability.tasks",
         "app.rca.tasks.rca_generation_task",
+        "app.chaos.tasks",
     ],
 )
 
@@ -64,6 +65,9 @@ task_routes = {
     },
     "app.rca.tasks.generate_rca": {
         "queue": "celery",
+    },
+    "app.chaos.tasks.reconcile_expired_runs": {
+        "queue": "pipeline_queue",
     },
 }
 
@@ -92,6 +96,15 @@ beat_schedule = {
             "app.reliability.tasks.evaluate_all_slos"
         ),
         "schedule": 60.0,
+        "options": {
+            "queue": "pipeline_queue",
+        },
+    },
+    "reconcile-expired-chaos-runs": {
+        "task": "app.chaos.tasks.reconcile_expired_runs",
+        "schedule": float(
+            os.getenv("CHAOS_WATCHDOG_INTERVAL_SECONDS", "30")
+        ),
         "options": {
             "queue": "pipeline_queue",
         },
