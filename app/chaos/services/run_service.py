@@ -219,7 +219,7 @@ class DatabasePlatformIQObserver:
             )
         db.commit()
         db.refresh(run)
-        return ObservationResult(recovered=recovered)
+        return ObservationResult(recovered=recovered and incident is not None)
 
     def _observe_incident_artifacts(
         self,

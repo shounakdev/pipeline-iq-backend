@@ -16,6 +16,7 @@ from app.events.constants import (
     INCIDENT_CREATED,
     RCA_COMPLETED,
     RECOVERY_VERIFIED,
+    SERVICE_DOWN,
     REMEDIATION_APPROVED,
     REMEDIATION_COMPLETED,
     REMEDIATION_RECOMMENDED,
@@ -203,6 +204,28 @@ def test_alert_after_injection_is_linked(correlation_db):
         (ChaosObservationType.ALERT_CREATED, "alert-after")
     ]
 
+def test_legacy_observability_alert_is_linked(correlation_db):
+    service, run, injected_at = _context(correlation_db)
+    event = _event(
+        SERVICE_DOWN,
+        injected_at + timedelta(seconds=3),
+        service_id=service.id,
+        environment="staging",
+        snapshot_id="snapshot-live",
+    )
+
+    correlate_event(correlation_db, event)
+
+    observations = repository.list_observations_for_run(
+        correlation_db,
+        run.id,
+    )
+    assert len(observations) == 1
+    assert (
+        observations[0].observation_type
+        == ChaosObservationType.ALERT_CREATED
+    )
+    assert observations[0].resource_id == event.event_id
 
 def test_alert_before_injection_is_not_linked(correlation_db):
     service, run, injected_at = _context(correlation_db)

@@ -297,7 +297,7 @@ def handle_telemetry_alert_event(
                 == deduplication_key
             )
             | (
-                Incident.source_event_id
+                Incident.triggered_by_event_id
                 == record.event_id
             )
         )
@@ -320,7 +320,7 @@ def handle_telemetry_alert_event(
     )
 
     detected_at = (
-        getattr(record, "occurred_at", None)
+        getattr(record, "timestamp", None)
         or getattr(record, "created_at", None)
         or utc_now()
     )
@@ -354,15 +354,6 @@ def handle_telemetry_alert_event(
             record.correlation_id
             or deduplication_key
         ),
-
-        # Legacy Sprint 5 compatibility fields.
-        service_name=service_name,
-        incident_type=record.event_type,
-        source="platformiq-observability",
-        source_event_id=record.event_id,
-        snapshot_id=snapshot_id,
-        payload=payload,
-        raw_event=raw_event,
     )
 
     db.add(incident)

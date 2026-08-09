@@ -13,7 +13,10 @@ from app.chaos import repository
 from app.chaos.services.observation_service import record_observation
 from app.events.constants import (
     ALERT_CREATED,
+    HIGH_ERROR_RATE,
+    HIGH_LATENCY,
     INCIDENT_CREATED,
+    POD_RESTART_SPIKE,
     RCA_COMPLETED,
     RECOVERY_FAILED,
     RECOVERY_VERIFIED,
@@ -21,6 +24,8 @@ from app.events.constants import (
     REMEDIATION_APPROVED,
     REMEDIATION_COMPLETED,
     REMEDIATION_RECOMMENDED,
+    SERVICE_DEGRADED,
+    SERVICE_DOWN,
 )
 from app.models import (
     ChaosObservationType,
@@ -35,9 +40,19 @@ from app.models import (
 )
 
 
+LEGACY_ALERT_EVENT_TYPES = {
+    HIGH_ERROR_RATE,
+    HIGH_LATENCY,
+    POD_RESTART_SPIKE,
+    SERVICE_DEGRADED,
+    SERVICE_DOWN,
+}
+
+
 CORRELATION_EVENT_TYPES = {
     ALERT_CREATED,
     RELIABILITY_ALERT_CREATED,
+    *LEGACY_ALERT_EVENT_TYPES,
     INCIDENT_CREATED,
     RCA_COMPLETED,
     REMEDIATION_RECOMMENDED,
@@ -126,7 +141,13 @@ def correlate_event(db: Session, record: EventRecord) -> ChaosRun | None:
     observation_type: ChaosObservationType
     singleton = False
 
-    if record.event_type in {ALERT_CREATED, RELIABILITY_ALERT_CREATED}:
+    if record.event_type in LEGACY_ALERT_EVENT_TYPES:
+        # Sprint 5 observability alerts are durable EventRecords rather than
+        # ReliabilityAlert rows.  They are still first-class alert evidence.
+        resource = record
+        observation_type = ChaosObservationType.ALERT_CREATED
+        singleton = True
+    elif record.event_type in {ALERT_CREATED, RELIABILITY_ALERT_CREATED}:
         resource_id = payload.get("reliability_alert_id") or payload.get("alert_id")
         resource = db.get(ReliabilityAlert, str(resource_id)) if resource_id else None
         if resource is not None:

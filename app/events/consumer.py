@@ -7,6 +7,7 @@ from typing import Any, Dict
 from confluent_kafka import Consumer, Producer
 
 from app.database import SessionLocal
+from app.chaos.services.correlation_service import correlate_event
 from app.events.handlers import handle_event
 from app.events.idempotency import create_event_record_if_new
 from app.models import DeadLetterEvent
@@ -194,6 +195,10 @@ def process_event_message(*, topic: str, raw_value: str) -> str:
                 return "DUPLICATE_IGNORED"
 
             handle_event(db, record)
+            # Correlation is part of the same transaction as domain handling.
+            # This guarantees that an alert/incident event cannot be marked as
+            # processed without also being offered to an active chaos run.
+            correlate_event(db, record)
             db.commit()
 
             return "PROCESSED"
