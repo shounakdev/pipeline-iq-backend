@@ -345,6 +345,29 @@ def get_benchmark_for_run(
         statement = statement.with_for_update()
     return db.execute(statement).scalar_one_or_none()
 
+def list_benchmarks_for_experiment(
+    db: Session,
+    experiment_id: UUID,
+) -> list[ExperimentBenchmark]:
+    """Return experiment benchmarks in chronological order."""
+    statement = (
+        select(ExperimentBenchmark)
+        .join(
+            ChaosRun,
+            ChaosRun.id
+            == ExperimentBenchmark.chaos_run_id,
+        )
+        .where(
+            ChaosRun.experiment_id == experiment_id,
+        )
+        .order_by(
+            ExperimentBenchmark.calculated_at.asc(),
+            ExperimentBenchmark.id.asc(),
+        )
+    )
+
+    return list(db.scalars(statement).all())
+
 
 def save_benchmark(
     db: Session,

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app.chaos.adapters.mock_adapter import MockChaosAdapter
@@ -7,6 +9,7 @@ from app.chaos.scenarios import (
     FaultyReleaseScenario,
     NetworkDelayScenario,
     PodKillScenario,
+    scenario_from_experiment,
 )
 from app.models import ChaosScenarioType
 
@@ -167,3 +170,49 @@ def test_cpu_pressure_defaults_match_scenario_contract():
 def test_duration_must_be_positive(scenario_type):
     with pytest.raises(ValueError, match="greater than zero"):
         scenario_type(NAMESPACE, duration_seconds=0)
+
+
+@pytest.mark.parametrize(
+    ("scenario_type", "failure_config", "kind"),
+    [
+        (ChaosScenarioType.FAULTY_RELEASE, {"port": 8081}, "HTTPChaos"),
+        (ChaosScenarioType.POD_KILL, {}, "PodChaos"),
+        (
+            ChaosScenarioType.NETWORK_DELAY,
+            {"latency_ms": 1500, "jitter_ms": 100},
+            "NetworkChaos",
+        ),
+        (
+            ChaosScenarioType.DATABASE_DELAY,
+            {"database_port": 5432, "latency_ms": 1800},
+            "NetworkChaos",
+        ),
+        (
+            ChaosScenarioType.CPU_PRESSURE,
+            {"workers": 3, "load_percent": 80},
+            "StressChaos",
+        ),
+    ],
+)
+def test_persisted_experiment_materializes_its_configured_scenario(
+    scenario_type,
+    failure_config,
+    kind,
+):
+    experiment = SimpleNamespace(
+        scenario_type=scenario_type,
+        target_namespace=NAMESPACE,
+        target_environment="staging",
+        target_service=SimpleNamespace(name=SERVICE),
+        failure_config={"duration_seconds": 45, **failure_config},
+    )
+
+    scenario = scenario_from_experiment(experiment)
+    manifest = scenario.build_manifest(run_id="repeatable-run")
+
+    assert scenario.scenario_type == scenario_type
+    assert scenario.duration_seconds == 45
+    assert manifest["kind"] == kind
+    assert manifest["metadata"]["labels"]["platformiq.io/scenario"] == (
+        scenario_type.value.lower()
+    )

@@ -9,17 +9,21 @@ from sqlalchemy.orm import sessionmaker
 
 from app.chaos import repository
 from app.chaos.services.correlation_service import correlate_event
+from app.chaos.services.benchmark_service import calculate_benchmark
 from app.chaos.services.observation_service import as_utc
 from app.events.constants import (
     ALERT_CREATED,
     INCIDENT_CREATED,
     RCA_COMPLETED,
     RECOVERY_VERIFIED,
+    REMEDIATION_APPROVED,
     REMEDIATION_COMPLETED,
     REMEDIATION_RECOMMENDED,
 )
 from app.models import (
     ActionType,
+    ApprovalDecision,
+    BenchmarkStatus,
     ChaosObservationType,
     ChaosRunStatus,
     ChaosScenarioType,
@@ -29,6 +33,7 @@ from app.models import (
     IncidentEvidence,
     IncidentSeverity,
     IncidentStatus,
+    ExperimentBenchmark,
     Project,
     RCAConfidence,
     RCAReport,
@@ -36,6 +41,7 @@ from app.models import (
     RecoveryVerification,
     RecoveryVerificationStatus,
     ReliabilityAlert,
+    RemediationApproval,
     RemediationExecution,
     RemediationExecutionStatus,
     RemediationRecommendation,
@@ -64,11 +70,13 @@ def correlation_db():
         IncidentEvidence.__table__,
         RCAReport.__table__,
         RemediationRecommendation.__table__,
+        RemediationApproval.__table__,
         RemediationExecution.__table__,
         RecoveryVerification.__table__,
         repository.ChaosExperiment.__table__,
         repository.ChaosRun.__table__,
         repository.ChaosObservation.__table__,
+        ExperimentBenchmark.__table__,
         OutboxEvent.__table__,
     ]
     Base.metadata.create_all(bind=engine, tables=tables)
@@ -417,3 +425,160 @@ def test_recovery_event_completes_observation_timeline(correlation_db):
     assert repository.list_observations_for_run(correlation_db, run.id)[-1].observation_type == (
         ChaosObservationType.RECOVERY_COMPLETED
     )
+
+
+def test_complete_experiment_chain_links_and_calculates_trustworthy_benchmark(
+    correlation_db,
+):
+    """Sprint 10J acceptance path from injection through verified recovery."""
+    service, run, injected_at = _context(correlation_db)
+    run.experiment.expected_behavior = {"diagnosis": "POD_FAILURE"}
+    repository.create_observation(
+        correlation_db,
+        chaos_run_id=run.id,
+        observation_type=ChaosObservationType.FAILURE_INJECTED,
+        source="chaos-adapter",
+        observed_at=injected_at,
+        resource_type="PodChaos",
+        resource_id=f"platformiq-pod-kill-{run.id}",
+        details={"status": "INJECTED"},
+    )
+    repository.create_observation(
+        correlation_db,
+        chaos_run_id=run.id,
+        observation_type=ChaosObservationType.TELEMETRY_ANOMALY,
+        source="platformiq",
+        observed_at=injected_at + timedelta(seconds=10),
+        resource_type="ServiceHealthSnapshot",
+        resource_id="snapshot-1",
+        details={"status": "UNHEALTHY"},
+    )
+
+    alert_at = injected_at + timedelta(seconds=20)
+    correlate_event(
+        correlation_db,
+        _event(
+            ALERT_CREATED,
+            alert_at,
+            alert_id="alert-10j",
+            service_id=service.id,
+            environment="staging",
+        ),
+    )
+    incident = _link_incident(
+        correlation_db, service, run, injected_at + timedelta(seconds=30)
+    )
+    evidence = IncidentEvidence(
+        incident_id=incident.id,
+        version=1,
+        status="COMPLETED",
+        schema_version="1.0",
+    )
+    correlation_db.add(evidence)
+    correlation_db.flush()
+    rca_at = injected_at + timedelta(seconds=100)
+    report = RCAReport(
+        incident_id=incident.id,
+        evidence_id=evidence.id,
+        version=1,
+        status=RCAReportStatus.COMPLETED,
+        generated_at=rca_at,
+        prompt_version="rca_v1",
+        probable_root_cause="Injected pod failure",
+        report_json={"root_cause_category": "POD_FAILURE"},
+    )
+    correlation_db.add(report)
+    correlation_db.flush()
+    correlate_event(
+        correlation_db,
+        _event(RCA_COMPLETED, rca_at, rca_report_id=str(report.id)),
+    )
+
+    recommended_at = injected_at + timedelta(seconds=110)
+    recommendation = _recommendation(
+        correlation_db, service, incident, recommended_at
+    )
+    correlate_event(
+        correlation_db,
+        _event(
+            REMEDIATION_RECOMMENDED,
+            recommended_at,
+            recommendation_id=str(recommendation.id),
+        ),
+    )
+    approved_at = injected_at + timedelta(seconds=125)
+    approval = RemediationApproval(
+        remediation_id=recommendation.id,
+        approved_by=None,
+        decision=ApprovalDecision.APPROVED,
+        approved_at=approved_at,
+    )
+    correlation_db.add(approval)
+    correlation_db.flush()
+    correlate_event(
+        correlation_db,
+        _event(
+            REMEDIATION_APPROVED,
+            approved_at,
+            recommendation_id=str(recommendation.id),
+            approval_id=str(approval.id),
+        ),
+    )
+
+    completed_at = injected_at + timedelta(seconds=140)
+    execution = RemediationExecution(
+        remediation_id=recommendation.id,
+        command_type=ActionType.RESTART_POD,
+        command_payload={},
+        execution_status=RemediationExecutionStatus.SUCCEEDED,
+        started_at=completed_at - timedelta(seconds=5),
+        completed_at=completed_at,
+        result_summary={},
+        created_at=completed_at - timedelta(seconds=5),
+    )
+    correlation_db.add(execution)
+    correlation_db.flush()
+    correlate_event(
+        correlation_db,
+        _event(REMEDIATION_COMPLETED, completed_at, execution_id=str(execution.id)),
+    )
+    recovered_at = injected_at + timedelta(seconds=150)
+    verification = RecoveryVerification(
+        remediation_id=recommendation.id,
+        remediation_execution_id=execution.id,
+        verification_status=RecoveryVerificationStatus.VERIFIED,
+        verified_at=recovered_at,
+        metrics_snapshot={"healthy": True},
+    )
+    correlation_db.add(verification)
+    correlation_db.flush()
+    correlate_event(
+        correlation_db,
+        _event(
+            RECOVERY_VERIFIED,
+            recovered_at,
+            verification_id=str(verification.id),
+        ),
+    )
+    correlation_db.commit()
+    correlation_db.refresh(run)
+
+    benchmark = calculate_benchmark(correlation_db, run)
+    observations = repository.list_observations_for_run(correlation_db, run.id)
+    observed_types = {item.observation_type for item in observations}
+
+    assert ChaosObservationType.FAILURE_INJECTED in observed_types
+    assert ChaosObservationType.TELEMETRY_ANOMALY in observed_types
+    assert ChaosObservationType.ALERT_CREATED in observed_types
+    assert run.incident_id == incident.id
+    assert run.rca_report_id == report.id
+    assert run.remediation_id == recommendation.id
+    assert run.remediation_execution_id == execution.id
+    assert run.recovery_verification_id == verification.id
+    assert benchmark.time_to_detect_ms == 10_000
+    assert benchmark.time_to_alert_ms == 20_000
+    assert benchmark.time_to_incident_ms == 30_000
+    assert benchmark.time_to_diagnose_ms == 70_000
+    assert benchmark.time_to_approve_ms == 15_000
+    assert benchmark.time_to_recover_ms == 150_000
+    assert benchmark.benchmark_status == BenchmarkStatus.PASSED

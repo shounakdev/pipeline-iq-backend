@@ -19,7 +19,7 @@ from app.chaos.exceptions import (
     ChaosRunNotFoundError,
     ChaosRunTimeoutError,
 )
-from app.chaos.kubernetes_adapter import build_podchaos_manifest
+from app.chaos.scenarios import scenario_from_experiment
 from app.models import (
     ChaosObservationType,
     ChaosRun,
@@ -322,14 +322,14 @@ def execute_run(
         db.commit()
         baseline = observer.capture_baseline(db, run)
 
-        manifest = build_podchaos_manifest(
+        scenario = scenario_from_experiment(
+            run.experiment,
+            duration_seconds=run.duration_seconds,
+        )
+        manifest = scenario.build_manifest(
             run_id=str(run.id),
-            environment=run.target_environment,
-            namespace=run.target_namespace,
-            service_name=run.experiment.target_service.name,
             operator_id=run.triggered_by or "system",
             deadline=_as_utc(run.deadline_at).isoformat(),
-            duration_seconds=run.duration_seconds,
         )
         # The manifest identity is deterministic. Retain it before the API call
         # so cleanup remains possible even if persistence fails after creation.

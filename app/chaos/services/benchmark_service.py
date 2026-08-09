@@ -95,7 +95,10 @@ def _expected_root_cause(run: ChaosRun) -> Any:
         if isinstance(experiment.expected_behavior, dict)
         else {}
     )
-    return behavior.get("expected_root_cause", behavior.get("root_cause"))
+    return behavior.get(
+    "expected_root_cause",
+    behavior.get("root_cause", behavior.get("diagnosis")),
+)
 
 
 def _actual_root_cause(run: ChaosRun) -> tuple[Any, bool]:

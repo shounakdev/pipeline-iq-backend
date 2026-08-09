@@ -28,7 +28,7 @@ from app.auth.router import router as auth_router
 from app.control_plane.routes import router as control_plane_router
 from app.chaos.config import ChaosSettings
 from app.chaos.reconciliation import reconcile_startup_runs_once
-from app.chaos.router import router as chaos_router
+from app.chaos.router import experiments_router, router as chaos_router
 from app.database import get_db
 from app.deployments.router import router as deployments_router
 from app.events.constants import PIPELINE_STARTED
@@ -74,6 +74,7 @@ app.include_router(rca_router)
 app.include_router(remediation_router)
 app.include_router(remediation_action_router)
 app.include_router(chaos_router)
+app.include_router(experiments_router)
 
 
 @app.exception_handler(IncidentNotFoundError)
